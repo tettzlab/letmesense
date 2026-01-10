@@ -1,0 +1,33 @@
+# Local observability stack for development
+# Usage: docker compose up -d
+#
+# Then run CLI with OTEL:
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 letmesense document.pdf
+#
+# View in Grafana: http://localhost:3000 (admin/admin)
+#   - Explore → Tempo for traces
+#   - Explore → Loki for logs
+#   - Explore → Mimir for metrics
+services:
+  grafana-lgtm:
+    image: grafana/otel-lgtm:latest
+    container_name: lgtm
+    ports:
+      - '3000:3000' # Grafana UI
+      - '4317:4317' # OTLP gRPC
+      - '4318:4318' # OTLP HTTP
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - lgtm-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/api/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  lgtm-data:

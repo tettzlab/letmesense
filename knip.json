@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "lefthook": false,
+  "entry": [
+    "cli/letmesense.ts",
+    "lib/**/index.ts",
+    "scripts/*.ts",
+    "cli/fixtures/*.ts",
+    "lib/*/fixtures/*.ts"
+  ],
+  "project": ["cli/**/*.ts", "lib/**/*.ts", "scripts/**/*.ts"],
+  "ignoreDependencies": ["@playwright/mcp", "mcp-remote"]
+}

@@ -1,0 +1,30 @@
+import tsconfigPaths from 'vite-tsconfig-paths'
+
+/**
+ * Shared vitest settings used across all test configurations.
+ * Centralizes common options to avoid duplication.
+ */
+
+export const plugins = [tsconfigPaths()]
+
+export const baseTestConfig = {
+  globals: true,
+  pool: 'threads' as const,
+}
+
+export const defaultExclude = ['**/node_modules/**', '**/.git/**']
+
+export const coverageConfig = {
+  enabled: false,
+  provider: 'v8' as const,
+  reporter: ['text', 'html', 'lcov'],
+  reportsDirectory: './coverage',
+  include: ['cli/**/*.ts', 'lib/**/*.ts'],
+  exclude: ['**/*.test.ts', '**/*.d.ts'],
+  thresholds: {
+    lines: 60,
+    functions: 60,
+    branches: 50,
+    statements: 60,
+  },
+}

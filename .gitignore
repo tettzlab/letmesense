@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+build/
+dist/
+out/
+
+# React Router
+.react-router/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor/IDE
+.idea/
+*.swp
+*.swo
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Claude
+CLAUDE.md
+.claude/
+.playwright-mcp/
+
+# OS
+.DS_Store
+Thumbs.db
+.fuse_hidden*
+
+# Testing
+coverage/
+coverage-e2e/
+coverage-full/
+test-results/
+playwright-report/
+.nyc_output/
+experiments/
+
+# Misc
+*.tsbuildinfo
+.cache/
+tmp/
+*.zip
+/*~
