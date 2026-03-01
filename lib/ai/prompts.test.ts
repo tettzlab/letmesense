@@ -1,15 +1,11 @@
-import { describe, expect, it } from 'vitest'
 import {
   buildPrompt,
   CONTINUITY_PROMPT_PREFIX,
-  composeVisionPrompt,
   DEFAULT_TEXT_PROMPT,
   DEFAULT_VISION_PROMPT,
   determineDocumentType,
   determineTextReliability,
-  extendPrompt,
   PROMPTS,
-  selectOcrPrompt,
   substituteVariables,
 } from './prompts.js'
 import type { PageContext } from './types.js'
@@ -192,39 +188,6 @@ describe('buildPrompt', () => {
   })
 })
 
-describe('extendPrompt', () => {
-  it('prepends content', () => {
-    const base = 'Base prompt\n{text}'
-    const result = extendPrompt(base, { prepend: 'Note: This is important.\n\n' })
-
-    expect(result).toBe('Note: This is important.\n\nBase prompt\n{text}')
-  })
-
-  it('appends content', () => {
-    const base = 'Base prompt\n{text}'
-    const result = extendPrompt(base, { append: '\n\nBe concise.' })
-
-    expect(result).toBe('Base prompt\n{text}\n\nBe concise.')
-  })
-
-  it('prepends and appends together', () => {
-    const base = 'Base\n{text}'
-    const result = extendPrompt(base, {
-      prepend: 'START\n',
-      append: '\nEND',
-    })
-
-    expect(result).toBe('START\nBase\n{text}\nEND')
-  })
-
-  it('returns base unchanged with empty options', () => {
-    const base = 'Base prompt'
-    const result = extendPrompt(base, {})
-
-    expect(result).toBe(base)
-  })
-})
-
 describe('CONTINUITY_PROMPT_PREFIX', () => {
   it('contains required variables', () => {
     expect(CONTINUITY_PROMPT_PREFIX).toContain('{page}')
@@ -265,30 +228,6 @@ describe('DEFAULT_VISION_PROMPT', () => {
   })
 })
 
-describe('selectOcrPrompt', () => {
-  it('returns DEFAULT_VISION for undefined confidence (digital extraction)', () => {
-    expect(selectOcrPrompt(undefined)).toBe('DEFAULT_VISION')
-  })
-
-  it('returns OCR_HIGH_CONFIDENCE for confidence >= 0.95', () => {
-    expect(selectOcrPrompt(0.95)).toBe('OCR_HIGH_CONFIDENCE')
-    expect(selectOcrPrompt(0.99)).toBe('OCR_HIGH_CONFIDENCE')
-    expect(selectOcrPrompt(1.0)).toBe('OCR_HIGH_CONFIDENCE')
-  })
-
-  it('returns OCR_MEDIUM_CONFIDENCE for confidence 0.8-0.95', () => {
-    expect(selectOcrPrompt(0.8)).toBe('OCR_MEDIUM_CONFIDENCE')
-    expect(selectOcrPrompt(0.9)).toBe('OCR_MEDIUM_CONFIDENCE')
-    expect(selectOcrPrompt(0.94)).toBe('OCR_MEDIUM_CONFIDENCE')
-  })
-
-  it('returns OCR_LOW_CONFIDENCE for confidence < 0.8', () => {
-    expect(selectOcrPrompt(0.79)).toBe('OCR_LOW_CONFIDENCE')
-    expect(selectOcrPrompt(0.5)).toBe('OCR_LOW_CONFIDENCE')
-    expect(selectOcrPrompt(0.0)).toBe('OCR_LOW_CONFIDENCE')
-  })
-})
-
 describe('OCR prompts', () => {
   it('OCR_HIGH_CONFIDENCE indicates text is generally reliable', () => {
     expect(PROMPTS.OCR_HIGH_CONFIDENCE).toContain('HIGH confidence')
@@ -308,57 +247,6 @@ describe('OCR prompts', () => {
   it('IMAGE_ONLY handles no-text case', () => {
     expect(PROMPTS.IMAGE_ONLY).toContain('No pre-extracted text is available')
     expect(PROMPTS.IMAGE_ONLY).not.toContain('{text}')
-  })
-})
-
-describe('composeVisionPrompt', () => {
-  it('composes prompt from text reliability and document type', () => {
-    const prompt = composeVisionPrompt({
-      textReliability: 'digital',
-      documentType: 'pdf',
-    })
-    expect(prompt).toContain('expert document analyst')
-    expect(prompt).toContain('Text Source')
-    expect(prompt).toContain('Document Guidelines')
-    expect(prompt).toContain('Rules')
-  })
-
-  it('includes text reliability instructions for OCR', () => {
-    const prompt = composeVisionPrompt({
-      textReliability: 'ocr-medium',
-      documentType: 'pdf',
-    })
-    expect(prompt).toContain('MEDIUM confidence')
-    expect(prompt).toContain('Cross-reference')
-  })
-
-  it('includes document type specific guidelines for PPTX', () => {
-    const prompt = composeVisionPrompt({
-      textReliability: 'digital',
-      documentType: 'pptx',
-    })
-    expect(prompt).toContain('Presentation Guidelines')
-    expect(prompt).toContain('slide title')
-    expect(prompt).toContain('speaker notes')
-  })
-
-  it('includes document type specific guidelines for XLSX', () => {
-    const prompt = composeVisionPrompt({
-      textReliability: 'digital',
-      documentType: 'xlsx',
-    })
-    expect(prompt).toContain('Spreadsheet Guidelines')
-    expect(prompt).toContain('tabular data')
-    expect(prompt).toContain('column headers')
-  })
-
-  it('combines OCR and document type correctly', () => {
-    const prompt = composeVisionPrompt({
-      textReliability: 'ocr-low',
-      documentType: 'pptx',
-    })
-    expect(prompt).toContain('LOW confidence')
-    expect(prompt).toContain('Presentation Guidelines')
   })
 })
 

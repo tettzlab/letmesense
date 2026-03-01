@@ -4,8 +4,8 @@
  */
 
 import { obs } from '../observability/index.js'
-import { SemanticMetrics } from '../observability/types.js'
 import type { FormatPlugin } from './plugin.js'
+import { Metrics } from './signals.js'
 import type { DocumentInput, FormatId } from './types.js'
 
 // ============================================================================
@@ -46,6 +46,8 @@ const MIME_TO_FORMAT: Record<string, FormatId> = {
   'image/gif': 'image',
   'image/webp': 'image',
   'image/svg+xml': 'image',
+  'text/html': 'html',
+  'application/xhtml+xml': 'html',
 }
 
 /** Extension to format mapping */
@@ -63,6 +65,9 @@ const EXT_TO_FORMAT: Record<string, FormatId> = {
   '.gif': 'image',
   '.webp': 'image',
   '.svg': 'image',
+  '.html': 'html',
+  '.htm': 'html',
+  '.xhtml': 'html',
 }
 
 // ============================================================================
@@ -144,7 +149,7 @@ export class PluginRegistry {
       if (plugin) {
         detectionMethod = 'explicit'
         metrics
-          .counter(SemanticMetrics.PIPELINE_FORMAT_DETECTED_COUNT)
+          .counter(Metrics.FORMAT_DETECTED_COUNT)
           .add(1, { format: options.format, method: detectionMethod })
         return { format: options.format, plugin }
       }
@@ -159,9 +164,7 @@ export class PluginRegistry {
           // Use detected format if known, otherwise fall back to plugin ID
           const format = detectFormatFromExtension(ext) ?? plugin.id
           detectionMethod = 'extension'
-          metrics
-            .counter(SemanticMetrics.PIPELINE_FORMAT_DETECTED_COUNT)
-            .add(1, { format, method: detectionMethod })
+          metrics.counter(Metrics.FORMAT_DETECTED_COUNT).add(1, { format, method: detectionMethod })
           return { format, plugin }
         }
       }
@@ -173,9 +176,7 @@ export class PluginRegistry {
           // Use detected format if known, otherwise fall back to plugin ID
           const format = detectFormatFromExtension(ext) ?? plugin.id
           detectionMethod = 'extension'
-          metrics
-            .counter(SemanticMetrics.PIPELINE_FORMAT_DETECTED_COUNT)
-            .add(1, { format, method: detectionMethod })
+          metrics.counter(Metrics.FORMAT_DETECTED_COUNT).add(1, { format, method: detectionMethod })
           return { format, plugin }
         }
       }
@@ -188,9 +189,7 @@ export class PluginRegistry {
         // Use detected format if known, otherwise fall back to plugin ID
         const format = detectFormatFromMime(options.mimeType) ?? plugin.id
         detectionMethod = 'mime'
-        metrics
-          .counter(SemanticMetrics.PIPELINE_FORMAT_DETECTED_COUNT)
-          .add(1, { format, method: detectionMethod })
+        metrics.counter(Metrics.FORMAT_DETECTED_COUNT).add(1, { format, method: detectionMethod })
         return { format, plugin }
       }
     }
@@ -203,17 +202,13 @@ export class PluginRegistry {
         const plugin = this.plugins.get(format)
         if (plugin) {
           detectionMethod = 'magic'
-          metrics
-            .counter(SemanticMetrics.PIPELINE_FORMAT_DETECTED_COUNT)
-            .add(1, { format, method: detectionMethod })
+          metrics.counter(Metrics.FORMAT_DETECTED_COUNT).add(1, { format, method: detectionMethod })
           return { format, plugin }
         }
       }
     }
 
-    metrics
-      .counter(SemanticMetrics.PIPELINE_FORMAT_DETECTED_COUNT)
-      .add(1, { format: 'unknown', method: 'failed' })
+    metrics.counter(Metrics.FORMAT_DETECTED_COUNT).add(1, { format: 'unknown', method: 'failed' })
     return null
   }
 
@@ -334,6 +329,14 @@ export function detectFormatFromBytes(bytes: Uint8Array): FormatId | null {
     const hasWebpMarker = WEBP_MARKER.every((b, i) => bytes[8 + i] === b)
     if (hasRiffHeader && hasWebpMarker) {
       return 'image'
+    }
+  }
+
+  // HTML: detect <!doctype html or <html prefix (case-insensitive)
+  if (bytes.length >= 5) {
+    const textStart = new TextDecoder().decode(bytes.slice(0, 100)).trimStart().toLowerCase()
+    if (textStart.startsWith('<!doctype html') || textStart.startsWith('<html')) {
+      return 'html'
     }
   }
 

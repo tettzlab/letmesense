@@ -1,5 +1,3 @@
-import { describe, expect, it, vi } from 'vitest'
-
 // Mock AI SDK providers before importing createModel
 vi.mock('@ai-sdk/openai', () => ({
   openai: {

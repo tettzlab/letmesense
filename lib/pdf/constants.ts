@@ -31,11 +31,8 @@ export const DEFAULT_MIXED_FALLBACK_CHARS = process.env.LETMESENSE_OCR_THRESHOLD
   ? parseInt(process.env.LETMESENSE_OCR_THRESHOLD, 10)
   : 50
 
-/**
- * Default timeout for URL fetch operations in milliseconds.
- * 30 seconds allows for slow servers while preventing indefinite hangs.
- */
-export const DEFAULT_FETCH_TIMEOUT_MS = 30000
+// Re-export shared timeout constants for backwards compatibility
+export { DEFAULT_FETCH_TIMEOUT_MS, DEFAULT_PAGE_TIMEOUT_MS } from '../common/timeouts.js'
 
 /**
  * Default OCR render scale factor.
@@ -53,13 +50,6 @@ export const DEFAULT_FETCH_TIMEOUT_MS = 30000
 export const DEFAULT_OCR_RENDER_SCALE = process.env.LETMESENSE_OCR_SCALE
   ? parseFloat(process.env.LETMESENSE_OCR_SCALE)
   : 2.5
-
-/**
- * Default per-page timeout for extraction/OCR operations in milliseconds.
- * 60 seconds allows for slow OCR on complex pages while preventing indefinite hangs.
- * Set to 0 to disable timeout.
- */
-export const DEFAULT_PAGE_TIMEOUT_MS = 60000
 
 /**
  * Wraps a promise with a timeout. Rejects with TimeoutError if the promise

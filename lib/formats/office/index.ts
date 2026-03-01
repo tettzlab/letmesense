@@ -17,7 +17,6 @@
 export { officePlugin } from './plugin.js'
 // Export types
 export type { OfficeExtractOptions, OfficeLoadedDocument, OfficeUnit } from './types.js'
-export { mapContentKindToOfficeKind, mapOfficeKindToContentKind } from './types.js'
 
 // ============================================================================
 // Auto-registration

@@ -18,7 +18,7 @@ export type ExtractionMode = 'vision' | 'text-only'
 export type TextReliability = 'digital' | 'ocr-high' | 'ocr-medium' | 'ocr-low' | 'none'
 
 /** Document/file type for format-specific instructions */
-export type DocumentType = 'pdf' | 'pptx' | 'xlsx' | 'docx' | 'image'
+export type DocumentType = 'pdf' | 'pptx' | 'xlsx' | 'docx' | 'image' | 'html'
 
 /** Options for building a prompt */
 export interface PromptOptions {
@@ -133,6 +133,13 @@ const DOCUMENT_TYPE_VISION: Record<DocumentType, string> = {
 - Represent diagrams, graphs, plots, and charts as ASCII art with labeled descriptions
 - Transcribe any text within graphics, callouts, labels, or annotations
 - Describe significant visual elements (logos, icons, photos) with brief context`,
+
+  html: `## Web Page Guidelines
+- Preserve semantic structure (headings, lists, tables, code blocks)
+- Maintain heading hierarchy from HTML heading elements
+- Reproduce tables using markdown table syntax
+- Preserve code blocks with language annotations where available
+- Convert inline formatting (bold, italic, links) to markdown equivalents`,
 }
 
 /** Document type specific instructions for TEXT-ONLY mode (no visual reference) */
@@ -164,6 +171,13 @@ const DOCUMENT_TYPE_TEXT_ONLY: Record<DocumentType, string> = {
   image: `## Content Guidelines
 - Format the extracted text as markdown
 - Preserve any structure apparent from the text`,
+
+  html: `## Web Page Guidelines
+- Preserve semantic structure (headings, lists, tables, code blocks)
+- Maintain heading hierarchy from HTML heading elements
+- Reproduce tables using markdown table syntax
+- Preserve code blocks with language annotations where available
+- Convert inline formatting (bold, italic, links) to markdown equivalents`,
 }
 
 /** Common rules that apply to all prompts */
@@ -275,6 +289,10 @@ const EXTENSION_TO_DOCTYPE: Record<string, DocumentType> = {
   '.doc': 'docx',
   '.odt': 'docx',
   '.rtf': 'docx',
+  // HTML
+  '.html': 'html',
+  '.htm': 'html',
+  '.xhtml': 'html',
   // Images
   '.png': 'image',
   '.jpg': 'image',
@@ -381,3 +399,73 @@ export const TEXT_ONLY_OCR_LOW_PDF = buildPromptForExtraction({
   textReliability: 'ocr-low',
   documentType: 'pdf',
 })
+
+// ============================================================================
+// Prompt Presets
+// ============================================================================
+
+/** All built-in prompts indexed by preset name */
+export const PROMPTS = {
+  DEFAULT_TEXT: TEXT_ONLY_DIGITAL_PDF,
+  DEFAULT_VISION: VISION_DIGITAL_PDF,
+  OCR_HIGH_CONFIDENCE: VISION_OCR_HIGH_PDF,
+  OCR_MEDIUM_CONFIDENCE: VISION_OCR_MEDIUM_PDF,
+  OCR_LOW_CONFIDENCE: VISION_OCR_LOW_PDF,
+  IMAGE_ONLY: VISION_NO_TEXT_PDF,
+  IMAGE_VISION: VISION_IMAGE,
+  PPTX: VISION_PPTX,
+  XLSX: VISION_XLSX,
+  DOCX: VISION_DOCX,
+  TEXT_ONLY: TEXT_ONLY_DIGITAL_PDF,
+  TEXT_ONLY_OCR_HIGH: TEXT_ONLY_OCR_HIGH_PDF,
+  TEXT_ONLY_OCR_MEDIUM: TEXT_ONLY_OCR_MEDIUM_PDF,
+  TEXT_ONLY_OCR_LOW: TEXT_ONLY_OCR_LOW_PDF,
+} as const
+
+export type PromptPreset = keyof typeof PROMPTS
+
+// ============================================================================
+// Previous Tail Extraction
+// ============================================================================
+
+/** Maximum characters to use for previousTail context */
+const PREVIOUS_TAIL_MAX_LENGTH = 200
+
+/**
+ * Extract a clean tail from content for continuity context.
+ * Finds a natural break point (sentence/paragraph end, word boundary)
+ * to avoid cutting in the middle of words or markdown structures.
+ */
+export function extractPreviousTail(content: string, maxLength = PREVIOUS_TAIL_MAX_LENGTH): string {
+  if (content.length <= maxLength) {
+    return content
+  }
+
+  // Start from the last maxLength characters
+  let tail = content.slice(-maxLength)
+
+  // Try to find a natural break point (paragraph, sentence, or word boundary)
+  // Priority: paragraph > sentence > word
+
+  // Look for paragraph break (double newline)
+  const paragraphBreak = tail.indexOf('\n\n')
+  if (paragraphBreak !== -1 && paragraphBreak < maxLength * 0.5) {
+    // Found a paragraph break in the first half, use content after it
+    tail = tail.slice(paragraphBreak + 2)
+  } else {
+    // Look for sentence break (. ! ? followed by space or newline)
+    const sentenceMatch = tail.match(/[.!?][\s\n]/)
+    if (sentenceMatch?.index !== undefined && sentenceMatch.index < maxLength * 0.3) {
+      // Found sentence end in the first third, use content after it
+      tail = tail.slice(sentenceMatch.index + 2)
+    } else {
+      // Fall back to word boundary (space after first 10 chars to ensure some content)
+      const spaceIndex = tail.indexOf(' ', 10)
+      if (spaceIndex !== -1 && spaceIndex < maxLength * 0.2) {
+        tail = tail.slice(spaceIndex + 1)
+      }
+    }
+  }
+
+  return tail.trim()
+}

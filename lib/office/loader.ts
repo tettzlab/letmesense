@@ -7,9 +7,10 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 
-import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { DEFAULT_FETCH_TIMEOUT_MS } from '../common/timeouts.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
 import { OfficeLoadError } from './errors.js'
+import { Metrics, Spans } from './signals.js'
 import type { OfficeFormat, OfficeInput } from './types.js'
 
 /** Supported file extensions mapped to formats */
@@ -120,7 +121,7 @@ async function loadFromFile(filePath: string): Promise<LoadResult> {
 /**
  * Load Office document from URL.
  */
-async function loadFromUrl(url: string, timeout = 30000): Promise<LoadResult> {
+async function loadFromUrl(url: string, timeout = DEFAULT_FETCH_TIMEOUT_MS): Promise<LoadResult> {
   try {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), timeout)
@@ -208,9 +209,9 @@ export async function loadOfficeDocument(
 ): Promise<LoadResult> {
   const { tracer, metrics, logger } = obs('office.loader')
 
-  return tracer.startSpan(SpanNames.OFFICE_LOAD_DOCUMENT, async (span) => {
+  return tracer.startSpan(Spans.LOAD_DOCUMENT, async (span) => {
     const inputType = detectInputType(input)
-    span.setAttribute('inputType', inputType)
+    span.setAttribute(SemanticAttributes.INPUT_TYPE, inputType)
 
     let result: LoadResult
 
@@ -239,15 +240,11 @@ export async function loadOfficeDocument(
         throw new OfficeLoadError(`Unknown input type: ${inputType}`)
     }
 
-    span.setAttribute('format', result.format)
-    span.setAttribute('bytes', result.bytes.length)
-    span.setAttribute('source', result.source)
-    metrics
-      .counter(SemanticMetrics.OFFICE_DOCUMENTS_LOADED_COUNT)
-      .add(1, { format: result.format, inputType })
-    metrics
-      .histogram(SemanticMetrics.OFFICE_DOCUMENT_BYTES)
-      .record(result.bytes.length, { format: result.format })
+    span.setAttribute(SemanticAttributes.FORMAT, result.format)
+    span.setAttribute(SemanticAttributes.BYTES, result.bytes.length)
+    span.setAttribute(SemanticAttributes.SOURCE, result.source)
+    metrics.counter(Metrics.DOCUMENT_LOADED_COUNT).add(1, { format: result.format, inputType })
+    metrics.histogram(Metrics.DOCUMENT_BYTES).record(result.bytes.length, { format: result.format })
     logger.debug(
       { format: result.format, bytes: result.bytes.length, source: result.source },
       'Office document loaded',

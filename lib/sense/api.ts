@@ -24,6 +24,7 @@
  */
 
 import { type ProviderId, parseModelSpec } from '../ai/config.js'
+import { initModelRegistry, isRegistryConfigured } from '../ai/models.js'
 import { buildProviderOptions } from '../ai/providerOptions.js'
 import { resolveModel as resolveModelFull } from '../ai/resolve.js'
 import type {
@@ -109,6 +110,24 @@ export interface VisionOptions extends LlmOptions {
  */
 export interface SenseOptions {
   // ──────────────────────────────────────────────────────────────────────────
+  // Model Registry
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Path to a models.json file.
+   * Defaults to the bundled models.json shipped with the package.
+   * Equivalent to CLI's `--models-file`.
+   */
+  modelsFile?: string
+
+  /**
+   * Raw JSON string for the model registry.
+   * Overrides `modelsFile` when both are provided.
+   * Equivalent to CLI's `--models-json`.
+   */
+  modelsJson?: string
+
+  // ──────────────────────────────────────────────────────────────────────────
   // Input Options
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -183,6 +202,22 @@ export interface SenseOptions {
    * @default false
    */
   headers?: boolean
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // HTML/Web Options
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Include links in HTML markdown output.
+   * @default true
+   */
+  includeLinks?: boolean
+
+  /**
+   * Include images in HTML markdown output.
+   * @default true
+   */
+  includeImages?: boolean
 
   // ──────────────────────────────────────────────────────────────────────────
   // Image Options
@@ -296,6 +331,19 @@ export type SenseChunk = VisionChunk
 // Internal Helpers
 // ============================================================================
 
+/**
+ * Forward explicit model-registry options to initModelRegistry().
+ * If neither is set, loadModelsJson() handles env vars and ./models.json fallback.
+ */
+function ensureModelsConfigured(options: SenseOptions): void {
+  if (isRegistryConfigured()) return
+  if (options.modelsJson) {
+    initModelRegistry({ json: options.modelsJson })
+  } else if (options.modelsFile) {
+    initModelRegistry({ file: options.modelsFile })
+  }
+}
+
 let _pluginsLoaded = false
 let _providersLoaded = false
 
@@ -305,13 +353,14 @@ async function ensurePluginsLoaded(): Promise<void> {
     import('../formats/pdf/index.js'),
     import('../formats/office/index.js'),
     import('../formats/image/index.js'),
+    import('../formats/web/index.js'),
   ])
   _pluginsLoaded = true
 }
 
 async function ensureProvidersLoaded(): Promise<void> {
   if (_providersLoaded) return
-  const { registerAllProviders } = await import('../ai/providers.js')
+  const { registerAllProviders } = await import('../ai/bootstrap.js')
   registerAllProviders()
   _providersLoaded = true
 }
@@ -346,15 +395,19 @@ function buildProcessorOptions(options: SenseOptions): ExtractAllOptions {
     includeMetadata: options.includeMetadata,
     onProgress: options.onProgress,
 
-    // Office options (slideRange/sheetNames match plugin property names)
+    // Office options
     includeNotes: options.includeNotes,
-    slideRange: options.slides,
-    sheetNames: options.sheets,
+    slides: options.slides,
+    sheets: options.sheets,
     headers: options.headers,
 
     // Image options
     maxDimension: options.maxDimension,
     quality: options.quality,
+
+    // HTML/Web options
+    includeLinks: options.includeLinks,
+    includeImages: options.includeImages,
   }
 }
 
@@ -397,6 +450,8 @@ export async function sense(
   input: DocumentInput,
   options: SenseOptions = {},
 ): Promise<SenseResult> {
+  ensureModelsConfigured(options)
+
   const llmOpts = normalizeLlmOptions(options.llm)
   const visionOpts = normalizeVisionOptions(options.vision)
 
@@ -407,20 +462,18 @@ export async function sense(
 
   await ensurePluginsLoaded()
 
-  // Detect format/source once, before entering mode-specific paths
-  const { describeSource, getDefaultRegistry } = await import('../pipeline/registry.js')
-  const source = describeSource(input)
-  const detected = getDefaultRegistry().detectFormat(input, { format: options.format })
-  const format: FormatId = detected?.format ?? 'pdf'
-
   const { PipelineProcessor } = await import('../pipeline/processor.js')
   const processor = new PipelineProcessor()
 
   // Vision mode: collect streamed output
   if (visionOpts) {
+    const { describeSource } = await import('../pipeline/registry.js')
+    const source = describeSource(input)
     const chunks: string[] = []
     const errors: UnitError[] = []
     let unitCount = 0
+    let docMetadata: Record<string, unknown> | undefined
+    let format: FormatId | undefined = options.format
 
     // Accumulate tokens/cost from journal entries
     let totalInputTokens = 0
@@ -445,6 +498,10 @@ export async function sense(
       onJournal: wrappedJournal,
     })) {
       switch (chunk.type) {
+        case 'metadata':
+          docMetadata = chunk.metadata
+          format = chunk.format
+          break
         case 'unit-start':
           unitCount++
           break
@@ -457,6 +514,10 @@ export async function sense(
       }
     }
 
+    if (!format) {
+      throw new Error(`Cannot detect format for ${source}. Specify format explicitly.`)
+    }
+
     return {
       text: chunks.join(''),
       source,
@@ -464,7 +525,7 @@ export async function sense(
       unitCount,
       runCount: unitCount, // In vision mode, each unit is its own run
       errors,
-      metadata: options.includeMetadata ? {} : undefined,
+      metadata: options.includeMetadata ? (docMetadata ?? {}) : undefined,
       tokens:
         totalInputTokens > 0 || totalOutputTokens > 0
           ? { inputTokens: totalInputTokens, outputTokens: totalOutputTokens }
@@ -602,6 +663,7 @@ export async function* senseStream(
   input: DocumentInput,
   options: SenseOptions & { vision: true | VisionOptions },
 ): AsyncGenerator<SenseChunk, void, unknown> {
+  ensureModelsConfigured(options)
   await ensurePluginsLoaded()
   await ensureProvidersLoaded()
 
@@ -627,12 +689,19 @@ export async function* senseStream(
     visionModel = `${detected.provider}:${provider.defaultVisionModel}`
   }
 
+  // Resolve system prompt: inline prompt > promptFile > undefined
+  let systemPrompt = visionOpts.prompt
+  if (!systemPrompt && visionOpts.promptFile) {
+    const fs = await import('node:fs/promises')
+    systemPrompt = await fs.readFile(visionOpts.promptFile, 'utf-8')
+  }
+
   const processor = new PipelineProcessor()
 
   yield* processor.extractWithVision(input, {
     ...buildProcessorOptions(options),
     model: visionModel,
-    systemPrompt: visionOpts.prompt,
+    systemPrompt,
     promptPreset: visionOpts.promptPreset,
     renderScale: visionOpts.renderScale,
     usePlaywright: visionOpts.playwright,
@@ -670,6 +739,7 @@ export async function estimateCost(
   model: string
   provider: string
 }> {
+  ensureModelsConfigured(options)
   await ensurePluginsLoaded()
   await ensureProvidersLoaded()
 

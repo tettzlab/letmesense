@@ -3,7 +3,6 @@ import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 // Note: afterAll is used in getInstallInstructions test
 import { OfficeConvertError } from '../errors.js'
 import {
@@ -39,10 +38,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 describe('findLibreOffice', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('returns executable path when found via which/where', () => {
     vi.mocked(execSync).mockReturnValueOnce('/usr/bin/libreoffice\n')
 
@@ -93,10 +88,6 @@ describe('findLibreOffice', () => {
 })
 
 describe('checkLibreOffice', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('returns available: false when not found', () => {
     vi.mocked(execSync).mockImplementation(() => {
       throw new Error('not found')
@@ -151,7 +142,6 @@ describe('convertToPdf', () => {
   const tmpDir = '/tmp/test-lo-out'
 
   beforeEach(() => {
-    vi.clearAllMocks()
     // Default: LibreOffice not available
     vi.mocked(execSync).mockImplementation(() => {
       throw new Error('not found')
@@ -286,10 +276,6 @@ describe('convertToPdf', () => {
 })
 
 describe('convertWithProfile', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('includes profile directory in spawn arguments', async () => {
     vi.mocked(execSync)
       .mockReturnValueOnce('/usr/bin/libreoffice\n')

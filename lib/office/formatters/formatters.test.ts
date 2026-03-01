@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import type { ExtractResult } from '../types.js'
 import { formatAsCsv, formatSheetAsCsv } from './csv.js'
 import { formatResult, formatters, getFormatter } from './index.js'

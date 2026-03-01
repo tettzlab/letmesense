@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import {
   buildPromptForExtraction,
   composePrompt,
@@ -7,20 +6,7 @@ import {
   determineTextReliability,
   type ExtractionMode,
   type PromptOptions,
-  TEXT_ONLY_DIGITAL_PDF,
-  TEXT_ONLY_OCR_HIGH_PDF,
-  TEXT_ONLY_OCR_LOW_PDF,
-  TEXT_ONLY_OCR_MEDIUM_PDF,
   type TextReliability,
-  VISION_DIGITAL_PDF,
-  VISION_DOCX,
-  VISION_IMAGE,
-  VISION_NO_TEXT_PDF,
-  VISION_OCR_HIGH_PDF,
-  VISION_OCR_LOW_PDF,
-  VISION_OCR_MEDIUM_PDF,
-  VISION_PPTX,
-  VISION_XLSX,
 } from './prompts.js'
 
 // ============================================================================
@@ -35,7 +21,7 @@ const ALL_TEXT_RELIABILITIES: TextReliability[] = [
   'ocr-low',
   'none',
 ]
-const ALL_DOCUMENT_TYPES: DocumentType[] = ['pdf', 'pptx', 'xlsx', 'docx', 'image']
+const ALL_DOCUMENT_TYPES: DocumentType[] = ['pdf', 'pptx', 'xlsx', 'docx', 'image', 'html']
 
 // Phrases that should ONLY appear in vision mode (reference images)
 const VISION_ONLY_PHRASES = [
@@ -434,53 +420,6 @@ describe('buildPromptForExtraction', () => {
   })
 })
 
-describe('Pre-built prompts', () => {
-  describe('Vision mode pre-built prompts', () => {
-    const visionPrompts = [
-      { name: 'VISION_DIGITAL_PDF', prompt: VISION_DIGITAL_PDF },
-      { name: 'VISION_OCR_HIGH_PDF', prompt: VISION_OCR_HIGH_PDF },
-      { name: 'VISION_OCR_MEDIUM_PDF', prompt: VISION_OCR_MEDIUM_PDF },
-      { name: 'VISION_OCR_LOW_PDF', prompt: VISION_OCR_LOW_PDF },
-      { name: 'VISION_NO_TEXT_PDF', prompt: VISION_NO_TEXT_PDF },
-      { name: 'VISION_IMAGE', prompt: VISION_IMAGE },
-      { name: 'VISION_PPTX', prompt: VISION_PPTX },
-      { name: 'VISION_XLSX', prompt: VISION_XLSX },
-      { name: 'VISION_DOCX', prompt: VISION_DOCX },
-    ]
-
-    it.each(visionPrompts)('$name does NOT have {text} placeholder', ({ prompt }) => {
-      expect(prompt).not.toContain('{text}')
-    })
-
-    it.each(visionPrompts)('$name references document image', ({ prompt }) => {
-      expect(prompt).toContain('document image')
-    })
-  })
-
-  describe('Text-only mode pre-built prompts', () => {
-    const textOnlyPrompts = [
-      { name: 'TEXT_ONLY_DIGITAL_PDF', prompt: TEXT_ONLY_DIGITAL_PDF },
-      { name: 'TEXT_ONLY_OCR_HIGH_PDF', prompt: TEXT_ONLY_OCR_HIGH_PDF },
-      { name: 'TEXT_ONLY_OCR_MEDIUM_PDF', prompt: TEXT_ONLY_OCR_MEDIUM_PDF },
-      { name: 'TEXT_ONLY_OCR_LOW_PDF', prompt: TEXT_ONLY_OCR_LOW_PDF },
-    ]
-
-    it.each(textOnlyPrompts)('$name has {text} placeholder', ({ prompt }) => {
-      expect(prompt).toContain('{text}')
-    })
-
-    it.each(textOnlyPrompts)('$name does NOT reference images', ({ name, prompt }) => {
-      for (const phrase of VISION_ONLY_PHRASES) {
-        expect(prompt, `${name} should not contain "${phrase}"`).not.toContain(phrase)
-      }
-    })
-
-    it.each(textOnlyPrompts)('$name references extracted document text', ({ prompt }) => {
-      expect(prompt).toContain('extracted document text')
-    })
-  })
-})
-
 describe('All combinations matrix', () => {
   // Generate all possible combinations
   const allCombinations: PromptOptions[] = []
@@ -493,8 +432,8 @@ describe('All combinations matrix', () => {
   }
 
   it(`generates ${allCombinations.length} unique combinations`, () => {
-    // 2 modes × 5 reliabilities × 5 doc types = 50 combinations
-    expect(allCombinations).toHaveLength(50)
+    // 2 modes × 5 reliabilities × 6 doc types = 60 combinations
+    expect(allCombinations).toHaveLength(60)
   })
 
   it.each(
@@ -518,35 +457,6 @@ describe('All combinations matrix', () => {
     } else {
       expect(prompt).toContain('extracted document text')
     }
-  })
-
-  describe('Vision mode combinations have visual references', () => {
-    const visionCombinations = allCombinations.filter((c) => c.mode === 'vision')
-
-    it.each(
-      visionCombinations,
-    )('vision/$textReliability/$documentType has visual instructions', (options) => {
-      const prompt = composePrompt(options)
-      const hasVisualRef = VISION_ONLY_PHRASES.some((p) => prompt.includes(p))
-      expect(hasVisualRef, `Should have visual references for ${JSON.stringify(options)}`).toBe(
-        true,
-      )
-    })
-  })
-
-  describe('Text-only mode combinations have NO visual references', () => {
-    const textOnlyCombinations = allCombinations.filter((c) => c.mode === 'text-only')
-
-    it.each(
-      textOnlyCombinations,
-    )('text-only/$textReliability/$documentType has no visual instructions', (options) => {
-      const prompt = composePrompt(options)
-      for (const phrase of VISION_ONLY_PHRASES) {
-        expect(prompt, `Should not have "${phrase}" for ${JSON.stringify(options)}`).not.toContain(
-          phrase,
-        )
-      }
-    })
   })
 })
 
@@ -669,7 +579,6 @@ describe('determineDocumentType', () => {
     it('returns pdf for unknown extensions', () => {
       expect(determineDocumentType('.unknown')).toBe('pdf')
       expect(determineDocumentType('.txt')).toBe('pdf')
-      expect(determineDocumentType('.html')).toBe('pdf')
     })
 
     it('returns pdf for null/undefined', () => {

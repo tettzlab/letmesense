@@ -1,6 +1,6 @@
 import type { LanguageModel } from 'ai'
 import { obs } from '../observability/index.js'
-import { MODELS, type ProviderId, parseModelSpec } from './config.js'
+import { getModels, type ProviderId, parseModelSpec } from './config.js'
 import { createModel } from './createModel.js'
 
 const { logger } = obs('ai.registry')
@@ -9,7 +9,7 @@ const { logger } = obs('ai.registry')
  * Check if a model ID is known for the given provider.
  */
 function isKnownModel(provider: ProviderId, modelId: string): boolean {
-  const knownModels = MODELS[provider]
+  const knownModels = getModels()[provider]
   return knownModels.some((m) => m.id === modelId)
 }
 
@@ -29,10 +29,12 @@ export const registry = {
 
     // Warn if model is not in our known list (might be typo or new model)
     if (!isKnownModel(spec.provider, spec.modelId)) {
+      const known = getModels()
+        [spec.provider].map((m) => m.id)
+        .join(', ')
       logger.warn(
         { provider: spec.provider, modelId: spec.modelId },
-        `Unknown model "${spec.modelId}" for provider "${spec.provider}". ` +
-          `Known models: ${MODELS[spec.provider].map((m) => m.id).join(', ')}`,
+        `Unknown model "${spec.modelId}" for provider "${spec.provider}". Known models: ${known}`,
       )
     }
 

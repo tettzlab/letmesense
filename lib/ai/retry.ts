@@ -9,9 +9,10 @@ import {
   classifyError as classifyObsError,
   getErrorSpanAttributes,
   obs,
-  SemanticMetrics,
+  SemanticAttributes,
 } from '../observability/index.js'
-import { SpanNames } from '../observability/types.js'
+import { isAbortError } from '../pipeline/errors.js'
+import { Metrics, Spans } from './signals.js'
 
 // ============================================================================
 // Types
@@ -45,6 +46,10 @@ export interface RetryConfig {
   backoffMultiplier: number
   /** Add random jitter 0-25% to prevent thundering herd (default: true) */
   jitter: boolean
+  /** Optional callback for retry events (logging, metrics) */
+  onRetry?: (attempt: number, delay: number, error: Error, category: ErrorCategory) => void
+  /** AbortSignal for cancellation */
+  signal?: AbortSignal
 }
 
 export interface RetryResult<T> {
@@ -171,9 +176,25 @@ export function calculateDelay(
 
 /**
  * Sleep helper for retry delays.
+ * Optionally accepts an AbortSignal — when aborted, the timer is cleared
+ * and the promise rejects with the signal's reason.
  */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason)
+      return
+    }
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal?.reason)
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 // ============================================================================
@@ -233,16 +254,14 @@ export class AbortRetryError extends Error {
  *
  * @param fn - The async function to execute
  * @param config - Retry configuration (optional, uses defaults)
- * @param onRetry - Optional callback for retry events (logging, metrics)
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   config: Partial<RetryConfig> = {},
-  onRetry?: (attempt: number, delay: number, error: Error, category: ErrorCategory) => void,
 ): Promise<RetryResult<T>> {
   const { tracer, metrics, logger } = obs('ai.retry')
 
-  return tracer.startSpan(SpanNames.AI_RETRY, async (span) => {
+  return tracer.startSpan(Spans.RETRY, async (span) => {
     const cfg = { ...DEFAULT_RETRY_CONFIG, ...config }
     span.setAttribute('maxRetries', cfg.maxRetries)
 
@@ -251,17 +270,17 @@ export async function withRetry<T>(
     let lastCategory: ErrorCategory = 'permanent'
 
     for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
+      cfg.signal?.throwIfAborted()
+
       try {
         const result = await fn()
 
-        span.setAttribute('attempts', attempt + 1)
+        span.setAttribute(SemanticAttributes.ATTEMPTS, attempt + 1)
         span.setAttribute('totalDelayMs', totalDelayMs)
-        span.setAttribute('success', true)
+        span.setAttribute(SemanticAttributes.SUCCESS, true)
 
         if (attempt > 0) {
-          metrics
-            .counter(SemanticMetrics.AI_RETRY_SUCCESSES)
-            .add(1, { attempts: String(attempt + 1) })
+          metrics.counter(Metrics.RETRY_SUCCESS_COUNT).add(1, { attempts: String(attempt + 1) })
           logger.debug({ attempts: attempt + 1, totalDelayMs }, 'Retry succeeded')
         }
 
@@ -275,8 +294,8 @@ export async function withRetry<T>(
         // AbortRetryError: caller explicitly requested no further retries
         if (err instanceof AbortRetryError) {
           const inner = err.cause instanceof Error ? err.cause : err
-          span.setAttribute('attempts', attempt + 1)
-          span.setAttribute('success', false)
+          span.setAttribute(SemanticAttributes.ATTEMPTS, attempt + 1)
+          span.setAttribute(SemanticAttributes.SUCCESS, false)
           span.setAttribute('finalCategory', 'permanent')
           span.setAttribute('abortedRetry', true)
           return {
@@ -286,6 +305,12 @@ export async function withRetry<T>(
             totalDelayMs,
             finalCategory: 'permanent' as ErrorCategory,
           }
+        }
+
+        // Abort errors (DOMException or custom AbortError) should propagate,
+        // not be swallowed into a RetryResult.
+        if (isAbortError(err)) {
+          throw err
         }
 
         lastError = err instanceof Error ? err : new Error(String(err))
@@ -299,11 +324,11 @@ export async function withRetry<T>(
 
         // Don't retry permanent errors
         if (lastCategory === 'permanent') {
-          span.setAttribute('attempts', attempt + 1)
-          span.setAttribute('success', false)
+          span.setAttribute(SemanticAttributes.ATTEMPTS, attempt + 1)
+          span.setAttribute(SemanticAttributes.SUCCESS, false)
           span.setAttribute('finalCategory', lastCategory)
-          metrics.counter(SemanticMetrics.AI_RETRY_FAILURES).add(1, { category: lastCategory })
-          metrics.counter(SemanticMetrics.ERROR_COUNT).add(1, { category: obsClassified.category })
+          metrics.counter(Metrics.RETRY_FAILURE_COUNT).add(1, { category: lastCategory })
+          metrics.counter(Metrics.ERROR_COUNT).add(1, { category: obsClassified.category })
 
           return {
             success: false,
@@ -319,15 +344,15 @@ export async function withRetry<T>(
           const retryAfterMs = extractRetryAfter(err)
           const delay = calculateDelay(attempt, cfg, retryAfterMs)
 
-          metrics.counter(SemanticMetrics.AI_RETRY_ATTEMPTS).add(1, { category: lastCategory })
+          metrics.counter(Metrics.RETRY_ATTEMPT_COUNT).add(1, { category: lastCategory })
           logger.debug(
             { attempt: attempt + 1, delay, category: lastCategory, error: lastError.message },
             'Retrying after transient error',
           )
 
-          onRetry?.(attempt + 1, delay, lastError, lastCategory)
+          cfg.onRetry?.(attempt + 1, delay, lastError, lastCategory)
 
-          await sleep(delay)
+          await sleep(delay, cfg.signal)
           totalDelayMs += delay
         }
       }
@@ -335,13 +360,13 @@ export async function withRetry<T>(
 
     // Exhausted retries
     const finalObsClassified = classifyObsError(lastError)
-    span.setAttribute('attempts', cfg.maxRetries + 1)
+    span.setAttribute(SemanticAttributes.ATTEMPTS, cfg.maxRetries + 1)
     span.setAttribute('totalDelayMs', totalDelayMs)
-    span.setAttribute('success', false)
+    span.setAttribute(SemanticAttributes.SUCCESS, false)
     span.setAttribute('finalCategory', lastCategory)
-    metrics.counter(SemanticMetrics.AI_RETRY_EXHAUSTED).add(1, { category: lastCategory })
-    metrics.counter(SemanticMetrics.ERROR_COUNT).add(1, { category: finalObsClassified.category })
-    metrics.histogram(SemanticMetrics.AI_RETRY_TOTAL_DELAY_MS).record(totalDelayMs)
+    metrics.counter(Metrics.RETRY_EXHAUSTED_COUNT).add(1, { category: lastCategory })
+    metrics.counter(Metrics.ERROR_COUNT).add(1, { category: finalObsClassified.category })
+    metrics.histogram(Metrics.RETRY_TOTAL_DELAY_MS).record(totalDelayMs)
     logger.warn(
       { attempts: cfg.maxRetries + 1, totalDelayMs, category: lastCategory },
       'Retry attempts exhausted',

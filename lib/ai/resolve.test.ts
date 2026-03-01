@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import { ResolveModelError, resolveModel } from './resolve.js'
 
 describe('resolveModel', () => {
@@ -11,10 +10,10 @@ describe('resolveModel', () => {
       expect(result.encoding).toBe('o200k_base')
     })
 
-    it('resolves anthropic:claude-opus-4-5', () => {
-      const result = resolveModel('anthropic:claude-opus-4-5')
+    it('resolves anthropic:claude-opus-4-6', () => {
+      const result = resolveModel('anthropic:claude-opus-4-6')
       expect(result.provider).toBe('anthropic')
-      expect(result.modelId).toBe('claude-opus-4-5')
+      expect(result.modelId).toBe('claude-opus-4-6')
       expect(result.encoding).toBe('claude')
     })
 
@@ -32,9 +31,9 @@ describe('resolveModel', () => {
       expect(result.modelId).toBe('gpt-5-mini')
     })
 
-    it('resolves anthropic:sonnet to claude-sonnet-4-5', () => {
+    it('resolves anthropic:sonnet to claude-sonnet-4-6', () => {
       const result = resolveModel('anthropic:sonnet')
-      expect(result.modelId).toBe('claude-sonnet-4-5')
+      expect(result.modelId).toBe('claude-sonnet-4-6')
     })
 
     it('resolves google:flash to gemini-3-flash-preview', () => {
@@ -70,7 +69,7 @@ describe('resolveModel', () => {
 
     it('resolves anthropic:opus:high', () => {
       const result = resolveModel('anthropic:opus:high')
-      expect(result.modelId).toBe('claude-opus-4-5')
+      expect(result.modelId).toBe('claude-opus-4-6')
       expect(result.effort).toBe('high')
     })
 
@@ -119,10 +118,10 @@ describe('resolveModel', () => {
       expect(result.contextWindow).toBe(128000)
     })
 
-    it('returns zero pricing for unknown model', () => {
+    it('returns conservative default pricing for unknown model', () => {
       const result = resolveModel('openai:gpt-6-turbo')
-      expect(result.pricing.input).toBe(0)
-      expect(result.pricing.output).toBe(0)
+      expect(result.pricing.input).toBe(1.0)
+      expect(result.pricing.output).toBe(4.0)
     })
   })
 

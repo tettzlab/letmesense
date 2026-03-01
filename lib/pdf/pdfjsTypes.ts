@@ -6,7 +6,6 @@
  */
 
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjs.js'
-import { pdfjsLib } from './pdfjs.js'
 
 /**
  * Extended DocumentInitParameters with Node.js-specific options.
@@ -70,21 +69,23 @@ export interface SafeOPS {
 
 /**
  * Get type-safe OPS enum values.
- * Handles version differences in pdfjs-dist.
+ *
+ * These are stable constants from pdfjs-dist that don't change between versions.
+ * Using static values avoids the need for synchronous module access.
  */
 export function getSafeOPS(): SafeOPS {
-  // biome-ignore lint/suspicious/noExplicitAny: pdfjs-dist OPS type is incomplete
-  const OPS = pdfjsLib.OPS as any
+  // OPS values from pdfjs-dist v5.x - these are stable across versions
   return {
-    save: OPS.save,
-    restore: OPS.restore,
-    transform: OPS.transform,
-    paintImageXObject: OPS.paintImageXObject,
-    paintInlineImageXObject: OPS.paintInlineImageXObject,
-    paintImageXObjectRepeat: OPS.paintImageXObjectRepeat,
-    paintInlineImageXObjectGroup: OPS.paintInlineImageXObjectGroup,
-    setTransform: OPS.setTransform,
-    paintJpegXObject: OPS.paintJpegXObject,
+    save: 10,
+    restore: 11,
+    transform: 12,
+    paintImageXObject: 85,
+    paintInlineImageXObject: 86,
+    paintImageXObjectRepeat: 88,
+    paintInlineImageXObjectGroup: 87,
+    // These don't exist in pdfjs-dist v5
+    setTransform: undefined,
+    paintJpegXObject: undefined,
   }
 }
 

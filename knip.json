@@ -3,10 +3,12 @@
   "lefthook": false,
   "entry": [
     "cli/letmesense.ts",
+    "cli/letmedense.ts",
     "lib/**/index.ts",
     "scripts/*.ts",
     "cli/fixtures/*.ts",
-    "lib/*/fixtures/*.ts"
+    "lib/*/fixtures/*.ts",
+    "lib/testing/index.ts"
   ],
   "project": ["cli/**/*.ts", "lib/**/*.ts", "scripts/**/*.ts"],
   "ignoreDependencies": ["@playwright/mcp", "mcp-remote"]

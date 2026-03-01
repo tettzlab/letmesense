@@ -3,7 +3,6 @@
  */
 
 import type { LanguageModel } from 'ai'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock AI SDK before importing vision module
 vi.mock('ai', () => ({
@@ -24,14 +23,6 @@ type MockGenerateResult = Awaited<ReturnType<typeof generateText>>
 type MockStreamResult = ReturnType<typeof streamText>
 
 describe('vision', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   // ─────────────────────────────────────────────────────────────────────────────
   // analyzeImage (non-streaming)
   // ─────────────────────────────────────────────────────────────────────────────

@@ -1,6 +1,5 @@
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
 import type { Mock } from 'vitest'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock the canvas module
 const mockContext = {
@@ -52,9 +51,12 @@ const createMockPdf = (numPages = 3): MockPdf => ({
   getPage: vi.fn(async (_pageNum: number) => createMockPage()),
 })
 
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
 describe('renderPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockCanvas.toBuffer.mockReturnValue(Buffer.from('fake-image-data'))
   })
 
@@ -120,7 +122,6 @@ describe('renderPage', () => {
 
 describe('PageRenderer', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockCanvas.toBuffer.mockReturnValue(Buffer.from('fake-image-data'))
   })
 
@@ -224,7 +225,6 @@ describe('PageRenderer', () => {
 
 describe('renderAllPages', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockCanvas.toBuffer.mockReturnValue(Buffer.from('fake-image-data'))
   })
 
@@ -269,7 +269,6 @@ describe('renderAllPages', () => {
 
 describe('edge cases', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     mockCanvas.toBuffer.mockReturnValue(Buffer.from('fake-image-data'))
   })
 

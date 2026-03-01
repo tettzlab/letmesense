@@ -1,9 +1,17 @@
 /**
- * Domain-specific LLM types (PDF, Office, Image contexts and journaling)
+ * Domain-specific LLM types (journaling, formatting, streaming)
  *
  * Provider-agnostic types (LlmProvider, LlmConfig, etc.) are defined in ~/lib/ai/config.ts
+ * Domain-specific context types (PageContext, etc.) are defined in ~/lib/pipeline/types.ts
  */
 
+// Re-export context types from pipeline (canonical location)
+export type {
+  ImageContext,
+  JournalContext,
+  OfficeUnitContext,
+  PageContext,
+} from '../pipeline/types.js'
 // Re-export provider types from central config
 export type {
   CostBreakdown,
@@ -20,69 +28,15 @@ export type {
   TokenUsage,
 } from './config.js'
 
+// Import locally for use in JournalEntry
+import type { JournalContext } from '../pipeline/types.js'
+
 // ============================================================================
-// PDF-Specific Types
+// Formatting Types
 // ============================================================================
 
 /** Output format options */
 export type OutputFormat = 'text' | 'markdown'
-
-/** Page context for prompt template variables (PDF-specific) */
-export interface PageContext {
-  /** Extracted text for the current page */
-  text: string
-  /** Current page number (1-indexed) */
-  page: number
-  /** Total page count */
-  totalPages: number
-  /** Detected language (ISO 639-3) */
-  language: string
-  /** Page classification */
-  pageKind: string
-  /** Last ~200 chars of previous page for continuity */
-  previousTail: string
-  /** Current run index */
-  runIndex: number
-  /** Allow additional properties for extensibility */
-  [key: string]: unknown
-}
-
-/** Office unit context for journaling (DOCX/PPTX/XLSX) */
-export interface OfficeUnitContext {
-  /** Unit index (0-indexed) */
-  unitIndex: number
-  /** Human-readable unit label (e.g., "Slide 1", "Sheet 2") */
-  unitLabel: string
-  /** Office format (docx, pptx, xlsx, etc.) */
-  format: string
-  /** Total number of units */
-  totalUnits: number
-  /** Content kind classification */
-  contentKind?: string
-  /** Extracted text content */
-  text: string
-  /** Allow additional properties for extensibility */
-  [key: string]: unknown
-}
-
-/** Image context for journaling */
-export interface ImageContext {
-  /** File path of the image */
-  filePath: string
-  /** Image width in pixels */
-  width: number
-  /** Image height in pixels */
-  height: number
-  /** MIME type (e.g., 'image/png') */
-  mimeType: string
-  /** Text content (empty for images) */
-  text: string
-  /** Allow additional properties for extensibility */
-  [key: string]: unknown
-}
-
-/** Union type for all journal context types */
-export type JournalContext = PageContext | OfficeUnitContext | ImageContext
 
 /** Stream events emitted during formatting */
 export type StreamEvent =
@@ -120,6 +74,8 @@ export interface LlmFormatOptions {
   experiment?: string
   /** Journal callback for logging LLM calls */
   onJournal?: JournalCallback
+  /** AbortSignal for cancellation */
+  signal?: AbortSignal
 }
 
 // ============================================================================

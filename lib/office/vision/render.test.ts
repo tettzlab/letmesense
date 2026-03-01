@@ -7,7 +7,6 @@ import { existsSync } from 'node:fs'
 import { mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { checkLibreOffice } from '../convert/libreoffice.js'
 import type { ContentKind } from '../types.js'
 import {
@@ -304,20 +303,20 @@ describe('computeAdaptiveScale', () => {
   describe('ADAPTIVE_DIMENSIONS constants', () => {
     it('has expected values', () => {
       expect(DEFAULT_MAX_DIMENSION).toBe(1024)
-      expect(ADAPTIVE_DIMENSIONS['text-rich']).toBe(800)
+      expect(ADAPTIVE_DIMENSIONS['text-only']).toBe(800)
       expect(ADAPTIVE_DIMENSIONS.mixed).toBe(1024)
-      expect(ADAPTIVE_DIMENSIONS['image-heavy']).toBe(1536)
-      expect(ADAPTIVE_DIMENSIONS.table).toBe(1280)
+      expect(ADAPTIVE_DIMENSIONS['image-only']).toBe(1536)
+      expect(ADAPTIVE_DIMENSIONS.tabular).toBe(1280)
       expect(ADAPTIVE_DIMENSIONS.empty).toBe(600)
       expect(ADAPTIVE_DIMENSIONS.unknown).toBe(1024)
     })
 
     it('covers all ContentKind values', () => {
       const kinds: ContentKind[] = [
-        'text-rich',
-        'image-heavy',
+        'text-only',
+        'image-only',
         'mixed',
-        'table',
+        'tabular',
         'empty',
         'unknown',
       ]
@@ -338,28 +337,28 @@ describe('computeAdaptiveScale', () => {
       expect(scale).toBeCloseTo(expectedScale, 4)
     })
 
-    it('uses text-rich dimension for text-rich content', () => {
-      const scale = computeAdaptiveScale(letterPage, 'text-rich', {})
-      const expectedScale = ADAPTIVE_DIMENSIONS['text-rich'] / 792
+    it('uses text-only dimension for text-only content', () => {
+      const scale = computeAdaptiveScale(letterPage, 'text-only', {})
+      const expectedScale = ADAPTIVE_DIMENSIONS['text-only'] / 792
       expect(scale).toBeCloseTo(expectedScale, 4)
     })
 
-    it('uses higher dimension for image-heavy content', () => {
-      const scale = computeAdaptiveScale(letterPage, 'image-heavy', {})
-      const expectedScale = ADAPTIVE_DIMENSIONS['image-heavy'] / 792
+    it('uses higher dimension for image-only content', () => {
+      const scale = computeAdaptiveScale(letterPage, 'image-only', {})
+      const expectedScale = ADAPTIVE_DIMENSIONS['image-only'] / 792
       expect(scale).toBeCloseTo(expectedScale, 4)
     })
 
-    it('uses table dimension for table content', () => {
-      const scale = computeAdaptiveScale(letterPage, 'table', {})
-      const expectedScale = ADAPTIVE_DIMENSIONS.table / 792
+    it('uses tabular dimension for tabular content', () => {
+      const scale = computeAdaptiveScale(letterPage, 'tabular', {})
+      const expectedScale = ADAPTIVE_DIMENSIONS.tabular / 792
       expect(scale).toBeCloseTo(expectedScale, 4)
     })
 
-    it('text-rich produces smaller scale than image-heavy', () => {
-      const textRichScale = computeAdaptiveScale(letterPage, 'text-rich', {})
-      const imageHeavyScale = computeAdaptiveScale(letterPage, 'image-heavy', {})
-      expect(textRichScale).toBeLessThan(imageHeavyScale)
+    it('text-only produces smaller scale than image-only', () => {
+      const textOnlyScale = computeAdaptiveScale(letterPage, 'text-only', {})
+      const imageOnlyScale = computeAdaptiveScale(letterPage, 'image-only', {})
+      expect(textOnlyScale).toBeLessThan(imageOnlyScale)
     })
   })
 
@@ -374,9 +373,9 @@ describe('computeAdaptiveScale', () => {
     })
 
     it('applies adaptive scaling to landscape', () => {
-      const textRichScale = computeAdaptiveScale(landscapePage, 'text-rich', {})
-      const expectedScale = ADAPTIVE_DIMENSIONS['text-rich'] / 1920
-      expect(textRichScale).toBeCloseTo(expectedScale, 4)
+      const textOnlyScale = computeAdaptiveScale(landscapePage, 'text-only', {})
+      const expectedScale = ADAPTIVE_DIMENSIONS['text-only'] / 1920
+      expect(textOnlyScale).toBeCloseTo(expectedScale, 4)
     })
   })
 
@@ -390,19 +389,19 @@ describe('computeAdaptiveScale', () => {
     })
 
     it('disableAdaptiveScaling uses fixed dimension regardless of kind', () => {
-      const textRichScale = computeAdaptiveScale(letterPage, 'text-rich', {
+      const textOnlyScale = computeAdaptiveScale(letterPage, 'text-only', {
         disableAdaptiveScaling: true,
       })
-      const imageHeavyScale = computeAdaptiveScale(letterPage, 'image-heavy', {
+      const imageOnlyScale = computeAdaptiveScale(letterPage, 'image-only', {
         disableAdaptiveScaling: true,
       })
       // Both should use default dimension when adaptive is disabled
-      expect(textRichScale).toBe(imageHeavyScale)
-      expect(textRichScale).toBeCloseTo(DEFAULT_MAX_DIMENSION / 792, 4)
+      expect(textOnlyScale).toBe(imageOnlyScale)
+      expect(textOnlyScale).toBeCloseTo(DEFAULT_MAX_DIMENSION / 792, 4)
     })
 
     it('disableAdaptiveScaling + maxImageDimension uses custom dimension', () => {
-      const scale = computeAdaptiveScale(letterPage, 'image-heavy', {
+      const scale = computeAdaptiveScale(letterPage, 'image-only', {
         disableAdaptiveScaling: true,
         maxImageDimension: 600,
       })
@@ -411,17 +410,17 @@ describe('computeAdaptiveScale', () => {
     })
 
     it('maxImageDimension caps adaptive dimension', () => {
-      // image-heavy wants 1536, but maxImageDimension caps to 800
-      const scale = computeAdaptiveScale(letterPage, 'image-heavy', { maxImageDimension: 800 })
+      // image-only wants 1536, but maxImageDimension caps to 800
+      const scale = computeAdaptiveScale(letterPage, 'image-only', { maxImageDimension: 800 })
       const expectedScale = 800 / 792 // capped to 800
       expect(scale).toBeCloseTo(expectedScale, 4)
     })
 
     it('maxImageDimension does not affect lower adaptive dimensions', () => {
-      // text-rich wants 800, maxImageDimension is 1200 (higher)
+      // text-only wants 800, maxImageDimension is 1200 (higher)
       // adaptive dimension should be used since it's lower
-      const scale = computeAdaptiveScale(letterPage, 'text-rich', { maxImageDimension: 1200 })
-      const expectedScale = ADAPTIVE_DIMENSIONS['text-rich'] / 792
+      const scale = computeAdaptiveScale(letterPage, 'text-only', { maxImageDimension: 1200 })
+      const expectedScale = ADAPTIVE_DIMENSIONS['text-only'] / 792
       expect(scale).toBeCloseTo(expectedScale, 4)
     })
   })
@@ -430,15 +429,15 @@ describe('computeAdaptiveScale', () => {
     it('does not exceed 3.0 scale factor', () => {
       // Very small page that would need >3x scale
       const tinyPage = createMockPage(100, 100)
-      const scale = computeAdaptiveScale(tinyPage, 'image-heavy', {})
+      const scale = computeAdaptiveScale(tinyPage, 'image-only', {})
       expect(scale).toBeLessThanOrEqual(3.0)
     })
 
     it('small pages use capped scale', () => {
-      // Page at 200x200, image-heavy wants 1536px
+      // Page at 200x200, image-only wants 1536px
       // Scale would be 1536/200 = 7.68, but capped to 3.0
       const smallPage = createMockPage(200, 200)
-      const scale = computeAdaptiveScale(smallPage, 'image-heavy', {})
+      const scale = computeAdaptiveScale(smallPage, 'image-only', {})
       expect(scale).toBe(3.0)
     })
   })
@@ -446,8 +445,8 @@ describe('computeAdaptiveScale', () => {
   describe('token savings estimation', () => {
     const letterPage = createMockPage(612, 792)
 
-    it('text-rich pages result in ~67% smaller images than fixed 2.0 scale', () => {
-      const adaptiveScale = computeAdaptiveScale(letterPage, 'text-rich', {})
+    it('text-only pages result in ~67% smaller images than fixed 2.0 scale', () => {
+      const adaptiveScale = computeAdaptiveScale(letterPage, 'text-only', {})
       const fixedScale = 2.0
 
       // Pixel area ratio determines token usage

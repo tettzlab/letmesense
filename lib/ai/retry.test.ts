@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   calculateDelay,
   classifyError,
@@ -224,7 +223,7 @@ describe('withRetry', () => {
       .mockResolvedValue('ok')
     const onRetry = vi.fn()
 
-    await withRetry(fn, { initialDelayMs: 10 }, onRetry)
+    await withRetry(fn, { initialDelayMs: 10, onRetry })
 
     expect(onRetry).toHaveBeenCalledTimes(2)
     expect(onRetry).toHaveBeenNthCalledWith(
@@ -282,101 +281,58 @@ describe('withRetry', () => {
 // ============================================================================
 
 describe('classifyError - Real AI SDK error formats', () => {
-  describe('OpenAI error messages', () => {
-    it('classifies OpenAI rate limit errors', () => {
-      expect(classifyError(new Error('Rate limit reached for gpt-4 in organization'))).toBe(
-        'retryable',
-      )
-      expect(
-        classifyError(new Error('You exceeded your current quota, please check your plan')),
-      ).toBe('permanent') // This is a billing issue, not transient
-      expect(classifyError(new Error('Request too large for gpt-4'))).toBe('permanent')
-    })
-
-    it('classifies OpenAI server errors', () => {
-      // Note: Generic "had an error" doesn't match - we require explicit patterns
-      expect(classifyError(new Error('The server had an error processing your request'))).toBe(
-        'permanent',
-      )
-      // Explicit status codes DO match
-      expect(classifyError(new Error('OpenAI API error: 503'))).toBe('retryable')
-      expect(classifyError(new Error('Bad gateway'))).toBe('retryable')
-      // "Internal server error" matches
-      expect(classifyError(new Error('OpenAI returned internal server error'))).toBe('retryable')
-    })
-
-    it('classifies OpenAI auth errors', () => {
-      expect(classifyError(new Error('Incorrect API key provided'))).toBe('permanent')
-      expect(classifyError(new Error('Invalid API key'))).toBe('permanent')
-      expect(
-        classifyError(new Error('You must be a member of an organization to use the API')),
-      ).toBe('permanent')
-    })
-
-    it('classifies OpenAI content policy errors', () => {
-      expect(
-        classifyError(new Error('Your request was rejected as a result of our safety system')),
-      ).toBe('permanent')
-      expect(classifyError(new Error('Content filtered due to policy violation'))).toBe('permanent')
-    })
-  })
-
-  describe('Anthropic error messages', () => {
-    it('classifies Anthropic rate limit errors', () => {
-      expect(classifyError(new Error('rate_limit_error: Rate limit exceeded'))).toBe('retryable')
-      expect(classifyError(new Error('Too many requests, please slow down'))).toBe('permanent') // Ambiguous - default to permanent
-    })
-
-    it('classifies Anthropic server errors', () => {
-      // "overloaded" alone doesn't match our patterns - conservative default
-      expect(
-        classifyError(new Error('overloaded_error: Anthropic API is temporarily overloaded')),
-      ).toBe('permanent')
-      // "Internal server error" DOES match
-      expect(classifyError(new Error('api_error: Internal server error'))).toBe('retryable')
-      // "unavailable" matches
-      expect(classifyError(new Error('Service temporarily unavailable'))).toBe('retryable')
-      // 503 status code matches
-      expect(classifyError(new Error('Anthropic API 503: Service temporarily overloaded'))).toBe(
-        'retryable',
-      )
-    })
-
-    it('classifies Anthropic auth errors', () => {
-      expect(classifyError(new Error('authentication_error: Invalid x-api-key'))).toBe('permanent')
-      expect(
-        classifyError(new Error('permission_error: Your API key does not have permission')),
-      ).toBe('permanent')
-    })
-  })
-
-  describe('Google AI error messages', () => {
-    it('classifies Google rate limit errors', () => {
-      expect(classifyError(new Error('RESOURCE_EXHAUSTED: Quota exceeded'))).toBe('permanent') // Quota is different from rate limit
-      expect(classifyError(new Error('429 RESOURCE_EXHAUSTED: Rate Limit Exceeded'))).toBe(
-        'retryable',
-      )
-    })
-
-    it('classifies Google server errors', () => {
-      expect(classifyError(new Error('INTERNAL: Internal error encountered'))).toBe('retryable')
-      expect(classifyError(new Error('UNAVAILABLE: The service is currently unavailable'))).toBe(
-        'retryable',
-      )
-    })
-
-    it('classifies Google auth errors', () => {
-      expect(classifyError(new Error('UNAUTHENTICATED: Request had invalid authentication'))).toBe(
-        'permanent',
-      )
-      expect(classifyError(new Error('PERMISSION_DENIED: Permission denied'))).toBe('permanent')
-    })
+  // [message, expected, note?]
+  it.each([
+    // OpenAI
+    ['Rate limit reached for gpt-4 in organization', 'retryable'],
+    ['You exceeded your current quota, please check your plan', 'permanent'],
+    ['Request too large for gpt-4', 'permanent'],
+    ['The server had an error processing your request', 'permanent'],
+    ['OpenAI API error: 503', 'retryable'],
+    ['Bad gateway', 'retryable'],
+    ['OpenAI returned internal server error', 'retryable'],
+    ['Incorrect API key provided', 'permanent'],
+    ['Invalid API key', 'permanent'],
+    ['You must be a member of an organization to use the API', 'permanent'],
+    ['Your request was rejected as a result of our safety system', 'permanent'],
+    ['Content filtered due to policy violation', 'permanent'],
+    // Anthropic
+    ['rate_limit_error: Rate limit exceeded', 'retryable'],
+    ['Too many requests, please slow down', 'permanent'],
+    ['overloaded_error: Anthropic API is temporarily overloaded', 'permanent'],
+    ['api_error: Internal server error', 'retryable'],
+    ['Service temporarily unavailable', 'retryable'],
+    ['Anthropic API 503: Service temporarily overloaded', 'retryable'],
+    ['authentication_error: Invalid x-api-key', 'permanent'],
+    ['permission_error: Your API key does not have permission', 'permanent'],
+    // Google
+    ['RESOURCE_EXHAUSTED: Quota exceeded', 'permanent'],
+    ['429 RESOURCE_EXHAUSTED: Rate Limit Exceeded', 'retryable'],
+    ['INTERNAL: Internal error encountered', 'retryable'],
+    ['UNAVAILABLE: The service is currently unavailable', 'retryable'],
+    ['UNAUTHENTICATED: Request had invalid authentication', 'permanent'],
+    ['PERMISSION_DENIED: Permission denied', 'permanent'],
+  ] as [string, string][])('"%s" → %s', (message, expected) => {
+    expect(classifyError(new Error(message))).toBe(expected)
   })
 })
 
 describe('classifyError - Edge cases', () => {
-  it('handles empty error message', () => {
-    expect(classifyError(new Error(''))).toBe('permanent')
+  it.each([
+    ['', 'permanent', 'empty message'],
+    ['ECONNREFUSED', 'retryable', 'uppercase'],
+    ['econnrefused', 'retryable', 'lowercase'],
+    ['EconnRefused', 'retryable', 'mixed case'],
+    ['Networking error occurred', 'retryable', 'partial match: network'],
+    ['timeout_value exceeded', 'retryable', 'partial match: timeout'],
+    ['400 Bad Request timeout', 'retryable', 'timeout takes precedence over 400'],
+    ['Request timed out with 401 error', 'retryable', 'timeout takes precedence over 401'],
+    ['API call failed with status 503 after sending 1000 tokens', 'retryable', 'embedded 503'],
+    ['Error code: 401, message: unauthorized access attempt', 'permanent', 'embedded 401'],
+    ['Something unexpected happened', 'permanent', 'unknown → permanent'],
+    ['Error processing request', 'permanent', 'ambiguous → permanent'],
+  ] as [string, string, string][])('%s → %s (%s)', (message, expected) => {
+    expect(classifyError(new Error(message))).toBe(expected)
   })
 
   it('handles null and undefined', () => {
@@ -391,91 +347,33 @@ describe('classifyError - Edge cases', () => {
   })
 
   it('handles objects with custom toString', () => {
-    const customError = {
-      toString: () => '503 Service Unavailable',
-    }
+    const customError = { toString: () => '503 Service Unavailable' }
     expect(classifyError(customError)).toBe('retryable')
-  })
-
-  it('prioritizes timeout over other patterns', () => {
-    // Message contains both "timeout" and "400"
-    expect(classifyError(new Error('400 Bad Request timeout'))).toBe('retryable')
-    expect(classifyError(new Error('Request timed out with 401 error'))).toBe('retryable')
-  })
-
-  it('handles mixed case sensitivity correctly', () => {
-    expect(classifyError(new Error('ECONNREFUSED'))).toBe('retryable')
-    expect(classifyError(new Error('econnrefused'))).toBe('retryable')
-    expect(classifyError(new Error('EconnRefused'))).toBe('retryable')
-  })
-
-  it('handles partial matches correctly', () => {
-    // "network" is in "networking" - should still match
-    expect(classifyError(new Error('Networking error occurred'))).toBe('retryable')
-    // "timeout" is in "timeout_value" - should still match
-    expect(classifyError(new Error('timeout_value exceeded'))).toBe('retryable')
-  })
-
-  it('handles status codes embedded in longer messages', () => {
-    expect(
-      classifyError(new Error('API call failed with status 503 after sending 1000 tokens')),
-    ).toBe('retryable')
-    expect(classifyError(new Error('Error code: 401, message: unauthorized access attempt'))).toBe(
-      'permanent',
-    )
-  })
-
-  it('handles ambiguous messages - conservative approach', () => {
-    // Unknown error patterns default to permanent (conservative)
-    expect(classifyError(new Error('Something unexpected happened'))).toBe('permanent')
-    expect(classifyError(new Error('Error processing request'))).toBe('permanent')
   })
 })
 
 describe('extractRetryAfter - Edge cases', () => {
-  it('handles zero value', () => {
-    expect(extractRetryAfter(new Error('Retry-After: 0'))).toBeUndefined()
-  })
-
-  it('handles negative value', () => {
-    expect(extractRetryAfter(new Error('Retry-After: -5'))).toBeUndefined()
-  })
-
-  it('handles decimal/float values (takes integer part)', () => {
-    // parseInt will parse "5.5" as 5
-    expect(extractRetryAfter(new Error('Retry-After: 5.5'))).toBe(5000)
-  })
-
-  it('handles boundary value at 299 (just under limit)', () => {
-    expect(extractRetryAfter(new Error('Retry-After: 299'))).toBe(299000)
-  })
-
-  it('handles boundary value at 300 (at limit - rejected)', () => {
-    expect(extractRetryAfter(new Error('Retry-After: 300'))).toBeUndefined()
-  })
-
-  it('handles very small values', () => {
-    expect(extractRetryAfter(new Error('Retry-After: 1'))).toBe(1000)
-  })
-
-  it('handles multiple Retry-After patterns - takes first', () => {
-    expect(extractRetryAfter(new Error('Retry-After: 5, also wait 10 seconds'))).toBe(5000)
-  })
-
-  it('handles Retry-After with surrounding text', () => {
-    expect(extractRetryAfter(new Error('Rate limited. Retry-After: 30. Please slow down.'))).toBe(
-      30000,
-    )
-  })
-
-  it('handles case insensitivity', () => {
-    expect(extractRetryAfter(new Error('RETRY-AFTER: 5'))).toBe(5000)
-    expect(extractRetryAfter(new Error('retry-after: 5'))).toBe(5000)
-  })
-
-  it('handles alternative patterns', () => {
-    expect(extractRetryAfter(new Error('Please wait 30 sec before retrying'))).toBe(30000)
-    expect(extractRetryAfter(new Error('wait 5s'))).toBe(5000)
+  // [message, expected, note]
+  it.each([
+    ['Retry-After: 0', undefined, 'zero'],
+    ['Retry-After: -5', undefined, 'negative'],
+    ['Retry-After: 5.5', 5000, 'decimal (parseInt takes integer part)'],
+    ['Retry-After: 299', 299000, 'boundary: just under limit'],
+    ['Retry-After: 300', undefined, 'boundary: at limit — rejected'],
+    ['Retry-After: 1', 1000, 'very small'],
+    ['Retry-After: 5, also wait 10 seconds', 5000, 'multiple patterns — takes first'],
+    ['Rate limited. Retry-After: 30. Please slow down.', 30000, 'surrounding text'],
+    ['RETRY-AFTER: 5', 5000, 'uppercase'],
+    ['retry-after: 5', 5000, 'lowercase'],
+    ['Please wait 30 sec before retrying', 30000, 'wait N sec pattern'],
+    ['wait 5s', 5000, 'wait Ns pattern'],
+  ] as [string, number | undefined, string][])('%s → %s (%s)', (message, expected) => {
+    const result = extractRetryAfter(new Error(message))
+    if (expected === undefined) {
+      expect(result).toBeUndefined()
+    } else {
+      expect(result).toBe(expected)
+    }
   })
 })
 
@@ -715,7 +613,7 @@ describe('withRetry - Callback behavior', () => {
     const fn = vi.fn().mockResolvedValue('success')
     const onRetry = vi.fn()
 
-    await withRetry(fn, {}, onRetry)
+    await withRetry(fn, { onRetry })
 
     expect(onRetry).not.toHaveBeenCalled()
   })
@@ -724,7 +622,7 @@ describe('withRetry - Callback behavior', () => {
     const fn = vi.fn().mockRejectedValue(new Error('401 Unauthorized'))
     const onRetry = vi.fn()
 
-    await withRetry(fn, {}, onRetry)
+    await withRetry(fn, { onRetry })
 
     expect(onRetry).not.toHaveBeenCalled()
   })
@@ -736,14 +634,14 @@ describe('withRetry - Callback behavior', () => {
     })
 
     // The callback error should propagate
-    await expect(withRetry(fn, { initialDelayMs: 10 }, onRetry)).rejects.toThrow('Callback error')
+    await expect(withRetry(fn, { initialDelayMs: 10, onRetry })).rejects.toThrow('Callback error')
   })
 
   it('passes correct delay to onRetry (with jitter bounds)', async () => {
     const fn = vi.fn().mockRejectedValueOnce(new Error('503')).mockResolvedValue('success')
     const onRetry = vi.fn()
 
-    await withRetry(fn, { initialDelayMs: 100, jitter: true }, onRetry)
+    await withRetry(fn, { initialDelayMs: 100, jitter: true, onRetry })
 
     expect(onRetry).toHaveBeenCalledTimes(1)
     const [, delay] = onRetry.mock.calls[0]
@@ -814,7 +712,7 @@ describe('Integration: Full retry scenario', () => {
     })
 
     const onRetry = vi.fn()
-    const result = await withRetry(mockApiCall, { initialDelayMs: 10, jitter: false }, onRetry)
+    const result = await withRetry(mockApiCall, { initialDelayMs: 10, jitter: false, onRetry })
 
     expect(result.success).toBe(true)
     expect(result.result).toEqual({ data: 'success', tokens: 100 })

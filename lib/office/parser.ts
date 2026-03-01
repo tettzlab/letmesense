@@ -6,8 +6,8 @@
 import officeParser from 'officeparser'
 
 import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
 import { OfficeParseError } from './errors.js'
+import { Metrics, Spans } from './signals.js'
 import type { DocumentMetadata, OfficeFormat } from './types.js'
 
 // ============================================================================
@@ -117,7 +117,7 @@ export interface ParseOptions {
 }
 
 /** Default parsing options */
-export const DEFAULT_PARSE_OPTIONS: ParseOptions = {
+const DEFAULT_PARSE_OPTIONS: ParseOptions = {
   newlineDelimiter: '\n\n',
   extractAttachments: true,
   ocr: false,
@@ -143,7 +143,7 @@ export async function parseOfficeFile(
 ): Promise<ParsedDocument> {
   const { tracer, metrics, logger } = obs('office.parser')
 
-  return tracer.startSpan(SpanNames.OFFICE_PARSE_FILE, async (span) => {
+  return tracer.startSpan(Spans.PARSE_FILE, async (span) => {
     span.setAttribute('filePath', filePath)
 
     const opts = { ...DEFAULT_PARSE_OPTIONS, ...options }
@@ -162,7 +162,7 @@ export async function parseOfficeFile(
       const parsed = ast as ParsedDocument
       span.setAttribute('contentNodes', parsed.content.length)
       span.setAttribute('attachments', parsed.attachments.length)
-      metrics.counter(SemanticMetrics.OFFICE_DOCUMENTS_PARSED_COUNT).add(1, { source: 'file' })
+      metrics.counter(Metrics.DOCUMENT_PARSED_COUNT).add(1, { source: 'file' })
       logger.debug({ filePath, contentNodes: parsed.content.length }, 'Office file parsed')
 
       return parsed
@@ -185,7 +185,7 @@ export async function parseOfficeBuffer(
 ): Promise<ParsedDocument> {
   const { tracer, metrics, logger } = obs('office.parser')
 
-  return tracer.startSpan(SpanNames.OFFICE_PARSE_BUFFER, async (span) => {
+  return tracer.startSpan(Spans.PARSE_BUFFER, async (span) => {
     span.setAttribute('bufferSize', buffer.length)
 
     const opts = { ...DEFAULT_PARSE_OPTIONS, ...options }
@@ -205,7 +205,7 @@ export async function parseOfficeBuffer(
       const parsed = ast as ParsedDocument
       span.setAttribute('contentNodes', parsed.content.length)
       span.setAttribute('attachments', parsed.attachments.length)
-      metrics.counter(SemanticMetrics.OFFICE_DOCUMENTS_PARSED_COUNT).add(1, { source: 'buffer' })
+      metrics.counter(Metrics.DOCUMENT_PARSED_COUNT).add(1, { source: 'buffer' })
       logger.debug(
         { bufferSize: buffer.length, contentNodes: parsed.content.length },
         'Office buffer parsed',

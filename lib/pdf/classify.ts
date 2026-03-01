@@ -1,5 +1,5 @@
 import { obs } from '../observability/index.js'
-import { SemanticMetrics } from '../observability/types.js'
+import { Metrics } from './signals.js'
 import type { PageKind } from './types.js'
 
 export interface ClassifyOptions {
@@ -88,7 +88,7 @@ export function classifyPageKind(
     kind = 'unknown'
   }
 
-  metrics.counter(SemanticMetrics.PDF_CLASSIFICATION_COUNT).add(1, { kind })
+  metrics.counter(Metrics.CLASSIFICATION_COUNT).add(1, { kind })
 
   return kind
 }

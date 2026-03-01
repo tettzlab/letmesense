@@ -4,7 +4,7 @@
  */
 
 import type { ParsedDocument } from '../../office/parser.js'
-import type { ContentKind as OfficeContentKind, OfficeFormat } from '../../office/types.js'
+import type { OfficeFormat } from '../../office/types.js'
 import type { PDFDocumentProxy } from '../../pdf/pdfjs.js'
 import type { LoadedDocument } from '../../pipeline/plugin.js'
 import type { ContentKind, DocumentUnit } from '../../pipeline/types.js'
@@ -24,8 +24,8 @@ export interface OfficeUnit extends DocumentUnit {
   /** Number of embedded images */
   imageCount: number
 
-  /** Original Office content kind (before mapping to unified ContentKind) */
-  officeKind: OfficeContentKind
+  /** Content kind (same as `kind` — retained for forward compatibility) */
+  officeKind: ContentKind
 
   /** For PPTX: 1-based slide number */
   slideNumber?: number
@@ -94,7 +94,7 @@ export interface OfficeLoadedDocument extends LoadedDocument {
  */
 export interface OfficeExtractOptions extends Record<string, unknown> {
   /** Override content kind for extraction strategy */
-  kind?: Exclude<OfficeContentKind, 'unknown' | 'empty'>
+  kind?: Exclude<ContentKind, 'unknown' | 'empty'>
 
   /** Enable OCR for embedded images */
   ocr?: boolean
@@ -109,10 +109,10 @@ export interface OfficeExtractOptions extends Record<string, unknown> {
   includeNotes?: boolean
 
   /** For PPTX: specific slide range (e.g., "1-5,7,9-12") */
-  slideRange?: string
+  slides?: string
 
   /** For XLSX: specific sheet names (comma-separated) */
-  sheetNames?: string
+  sheets?: string
 
   /** For XLSX: treat first row as headers */
   headers?: boolean
@@ -122,48 +122,4 @@ export interface OfficeExtractOptions extends Record<string, unknown> {
 
   /** Headers to include when fetching from URL */
   fetchHeaders?: Record<string, string>
-}
-
-// ============================================================================
-// Mapping Functions
-// ============================================================================
-
-/**
- * Map Office ContentKind to unified pipeline ContentKind.
- */
-export function mapOfficeKindToContentKind(officeKind: OfficeContentKind): ContentKind {
-  switch (officeKind) {
-    case 'text-rich':
-      return 'text-only'
-    case 'image-heavy':
-      return 'image-only'
-    case 'mixed':
-      return 'mixed'
-    case 'table':
-      return 'tabular'
-    case 'empty':
-      return 'empty'
-    default:
-      return 'unknown'
-  }
-}
-
-/**
- * Map unified ContentKind to Office ContentKind for extraction.
- */
-export function mapContentKindToOfficeKind(kind: ContentKind): OfficeContentKind {
-  switch (kind) {
-    case 'text-only':
-      return 'text-rich'
-    case 'image-only':
-      return 'image-heavy'
-    case 'mixed':
-      return 'mixed'
-    case 'tabular':
-      return 'table'
-    case 'empty':
-      return 'empty'
-    default:
-      return 'unknown'
-  }
 }

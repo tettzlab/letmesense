@@ -1,6 +1,6 @@
 import { obs } from '../observability/index.js'
-import { SemanticMetrics } from '../observability/types.js'
 import { isPdfTextItem } from './pdfjsTypes.js'
+import { Metrics } from './signals.js'
 
 export function textItemsToString(items: unknown[]): string {
   const { metrics } = obs('pdf.text')
@@ -15,7 +15,7 @@ export function textItemsToString(items: unknown[]): string {
     .trim()
 
   const durationMs = performance.now() - start
-  metrics.histogram(SemanticMetrics.PDF_TEXT_EXTRACT_DURATION_MS).record(durationMs)
+  metrics.histogram(Metrics.TEXT_EXTRACT_DURATION_MS).record(durationMs)
 
   return result
 }

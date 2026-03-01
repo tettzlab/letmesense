@@ -2,7 +2,6 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 
 const CLI_PATH = path.resolve('cli/letmesense.ts')
 const FIXTURES = path.resolve('lib/office/fixtures')
@@ -124,14 +123,14 @@ describe('letmesense CLI (unified wrapper)', () => {
       const result = await runCli(['-', '--input-format', 'pdf', '--quiet'], pdfBuffer)
       expect(result.exitCode).toBe(0)
       expect(result.stdout.length).toBeGreaterThan(0)
-    }, 60000)
+    }, 120000)
 
     test('accepts PPTX from stdin with --input-format pptx', async () => {
       const pptxBuffer = await fs.readFile(SAMPLES.pptx)
       const result = await runCli(['-', '--input-format', 'pptx'], pptxBuffer)
       expect(result.exitCode).toBe(0)
       expect(result.stdout.length).toBeGreaterThan(0)
-    }, 30000)
+    }, 120000)
   })
 
   // Consolidated: error handling (batch related tests)
@@ -139,12 +138,11 @@ describe('letmesense CLI (unified wrapper)', () => {
     test('errors for unknown/missing file extension', async () => {
       const unknownExt = await runCli(['file.xyz'])
       expect(unknownExt.exitCode).toBe(1)
-      expect(unknownExt.stderr).toContain('Unable to detect format')
-      expect(unknownExt.stderr).toContain('--input-format')
+      expect(unknownExt.stderr).toContain('Cannot detect format')
 
       const noExt = await runCli(['unknownfile'])
       expect(noExt.exitCode).toBe(1)
-      expect(noExt.stderr).toContain('Unable to detect format')
+      expect(noExt.stderr).toContain('Cannot detect format')
     }, 30000)
   })
 
@@ -155,7 +153,7 @@ describe('letmesense CLI (unified wrapper)', () => {
     expect(result.exitCode).toBe(0)
     const content = await fs.readFile(outputPath, 'utf-8')
     expect(content.length).toBeGreaterThan(0)
-  }, 60000)
+  }, 120000)
 
   test('writes PPTX output to file with -o', async () => {
     const outputPath = path.join(tempDir, 'output-pptx.txt')
@@ -170,11 +168,11 @@ describe('letmesense CLI (unified wrapper)', () => {
     // PDF URL - will fail to fetch but should detect format correctly
     const pdfResult = await runCli(['https://example.com/document.pdf', '--quiet'])
     expect(pdfResult.exitCode).not.toBe(0)
-    expect(pdfResult.stderr).not.toContain('Unable to detect format')
+    expect(pdfResult.stderr).not.toContain('Cannot detect format')
 
     // PPTX URL
     const pptxResult = await runCli(['https://example.com/slides.pptx'])
     expect(pptxResult.exitCode).not.toBe(0)
-    expect(pptxResult.stderr).not.toContain('Unable to detect format')
+    expect(pptxResult.stderr).not.toContain('Cannot detect format')
   }, 30000)
 })

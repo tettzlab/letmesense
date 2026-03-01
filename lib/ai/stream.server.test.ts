@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { mockObs, mockSignals } from '../testing/index.js'
 
 // Mock the AI SDK
 vi.mock('ai', () => ({
@@ -6,42 +6,21 @@ vi.mock('ai', () => ({
   generateText: vi.fn(),
 }))
 
-// Mock observability
-vi.mock('../observability/index.js', () => ({
-  obs: () => ({
-    logger: {
-      warn: vi.fn(),
-      info: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    },
-    tracer: {
-      startSpan: vi.fn((_name: string, fn: (span: unknown) => unknown) =>
-        fn({
-          setAttribute: vi.fn(),
-          setAttributes: vi.fn(),
-          setStatus: vi.fn(),
-          recordException: vi.fn(),
-          end: vi.fn(),
-        }),
-      ),
-    },
-    metrics: {
-      counter: vi.fn(() => ({ add: vi.fn() })),
-      histogram: vi.fn(() => ({ record: vi.fn() })),
+vi.mock('../observability/index.js', () => mockObs())
+
+vi.mock('./signals.js', () =>
+  mockSignals({
+    Spans: { RETRY: 'ai.retry' },
+    Metrics: {
+      RETRY_SUCCESS_COUNT: 'ai.retry.success.count',
+      RETRY_FAILURE_COUNT: 'ai.retry.failure.count',
+      RETRY_ATTEMPT_COUNT: 'ai.retry.attempt.count',
+      RETRY_EXHAUSTED_COUNT: 'ai.retry.exhausted.count',
+      RETRY_TOTAL_DELAY_MS: 'ai.retry.total_delay_ms',
+      ERROR_COUNT: 'ai.error.count',
     },
   }),
-  classifyError: () => ({ category: 'unknown', retryable: false }),
-  getErrorSpanAttributes: () => ({}),
-  SemanticMetrics: {
-    AI_RETRY_SUCCESSES: 'ai.retry.successes',
-    AI_RETRY_FAILURES: 'ai.retry.failures',
-    AI_RETRY_ATTEMPTS: 'ai.retry.attempts',
-    AI_RETRY_EXHAUSTED: 'ai.retry.exhausted',
-    AI_RETRY_TOTAL_DELAY_MS: 'ai.retry.total_delay_ms',
-    ERROR_COUNT: 'error.count',
-  },
-}))
+)
 
 import { generateText, streamText } from 'ai'
 import { generateTextWithRetry, streamTextWithRetry } from './stream.server.js'

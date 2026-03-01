@@ -2,7 +2,6 @@
  * Tests for vision prompt builders.
  */
 
-import { describe, expect, it } from 'vitest'
 import {
   buildBatchMessages,
   buildUserMessage,
@@ -68,7 +67,7 @@ describe('prompt', () => {
       attributes: {
         unitIndex: 0,
         unitLabel: 'Slide 1',
-        kind: 'text-rich',
+        kind: 'text-only',
         charCount: 11,
         imageCount: 0,
         textSample: 'Hello World',
@@ -156,7 +155,7 @@ describe('prompt', () => {
         attributes: {
           unitIndex: 0,
           unitLabel: 'Slide 1',
-          kind: 'text-rich',
+          kind: 'text-only',
           charCount: 11,
           imageCount: 0,
           textSample: 'First slide',
@@ -171,7 +170,7 @@ describe('prompt', () => {
         attributes: {
           unitIndex: 1,
           unitLabel: 'Slide 2',
-          kind: 'text-rich',
+          kind: 'text-only',
           charCount: 12,
           imageCount: 0,
           textSample: 'Second slide',

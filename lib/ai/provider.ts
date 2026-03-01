@@ -2,7 +2,10 @@
  * LLM provider abstraction and auto-detection
  */
 
+import { obs } from '../observability/index.js'
 import type { DetectedProvider, LlmConfig, LlmProvider, ProviderId } from './types.js'
+
+const { logger } = obs('ai.provider')
 
 /** Registry of available providers */
 const providers = new Map<ProviderId, LlmProvider>()
@@ -32,6 +35,7 @@ export function detectProvider(): DetectedProvider | null {
   for (const name of priority) {
     const provider = providers.get(name)
     if (provider?.isAvailable()) {
+      logger.debug({ provider: name }, 'Auto-detected LLM provider')
       return {
         provider: name,
         reason: `${name} API key found`,
@@ -39,6 +43,7 @@ export function detectProvider(): DetectedProvider | null {
     }
   }
 
+  logger.debug('No LLM provider detected from environment')
   return null
 }
 
@@ -89,6 +94,7 @@ export function resolveProvider(config?: Partial<LlmConfig>): LlmProvider {
     throw new Error(`Provider ${detected.provider} not found in registry`)
   }
 
+  logger.debug({ provider: detected.provider, reason: detected.reason }, 'Resolved LLM provider')
   return provider
 }
 

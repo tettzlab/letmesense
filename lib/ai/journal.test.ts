@@ -2,7 +2,6 @@ import { existsSync, rmSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   calculateEntryCost,
   createFileJournal,
@@ -55,7 +54,7 @@ const createOfficeContext = (overrides?: Partial<OfficeUnitContext>): OfficeUnit
   unitLabel: 'Slide 1',
   format: 'pptx',
   totalUnits: 5,
-  contentKind: 'text-rich',
+  contentKind: 'text-only',
   text: 'Slide content here',
   ...overrides,
 })

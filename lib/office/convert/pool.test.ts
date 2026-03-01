@@ -1,4 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { OfficeConvertError } from '../errors.js'
 import * as libreoffice from './libreoffice.js'
 import { convertManyToPdf, LibreOfficePool } from './pool.js'
@@ -9,11 +8,11 @@ vi.mock('./libreoffice.js', () => ({
   convertWithProfile: vi.fn(),
 }))
 
-describe('LibreOfficePool', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
+describe('LibreOfficePool', () => {
   describe('constructor', () => {
     it('creates pool with default options', () => {
       const pool = new LibreOfficePool()
@@ -360,10 +359,6 @@ describe('LibreOfficePool', () => {
 })
 
 describe('convertManyToPdf', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('converts multiple files using pool', async () => {
     vi.mocked(libreoffice.checkLibreOffice).mockReturnValue({
       available: true,
@@ -417,10 +412,6 @@ describe('convertManyToPdf', () => {
 })
 
 describe('LibreOfficePool queue handling', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('handles multiple concurrent jobs within pool size', async () => {
     vi.mocked(libreoffice.checkLibreOffice).mockReturnValue({
       available: true,

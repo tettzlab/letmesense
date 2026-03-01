@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import { textItemsToString } from './text.js'
 
 describe('textItemsToString', () => {

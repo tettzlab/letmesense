@@ -6,8 +6,7 @@
 import fs from 'node:fs/promises'
 
 import { toTesseractLang } from '../../common/languages.js'
-import { obs } from '../../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../../observability/types.js'
+import { obs, SemanticAttributes } from '../../observability/index.js'
 import { analyzePage } from '../../pdf/analyzePage.js'
 import { classifyPageKind } from '../../pdf/classify.js'
 import {
@@ -25,6 +24,7 @@ import { textItemsToString } from '../../pdf/text.js'
 import type { CliOption, FormatPlugin, RenderedContent } from '../../pipeline/plugin.js'
 import type { ContentKind, UnitExtractionResult } from '../../pipeline/types.js'
 import { ocrSinglePage } from './ocr.js'
+import { Metrics, Spans } from './signals.js'
 import {
   mapContentKindToPageKind,
   mapPageKindToContentKind,
@@ -77,7 +77,7 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
     const { tracer, metrics, logger } = obs('pdf.plugin')
     const { fetchTimeout = DEFAULT_FETCH_TIMEOUT_MS, fetchHeaders } = options
 
-    return tracer.startSpan(SpanNames.PDF_PLUGIN_LOAD, async (span) => {
+    return tracer.startSpan(Spans.LOAD, async (span) => {
       const inputType =
         input instanceof Uint8Array
           ? 'buffer'
@@ -88,7 +88,7 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
               : typeof input === 'string' && input.startsWith('http')
                 ? 'url'
                 : 'file'
-      span.setAttribute('inputType', inputType)
+      span.setAttribute(SemanticAttributes.INPUT_TYPE, inputType)
 
       let bytes: Uint8Array
 
@@ -111,15 +111,15 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
         throw new Error('Invalid input type: expected string, Uint8Array, Buffer, or URL')
       }
 
-      span.setAttribute('bytes', bytes.length)
-      metrics.histogram(SemanticMetrics.PDF_PLUGIN_LOAD_BYTES).record(bytes.length)
+      span.setAttribute(SemanticAttributes.BYTES, bytes.length)
+      metrics.histogram(Metrics.LOAD_BYTES).record(bytes.length)
 
       // Make a copy of bytes before passing to pdf.js, as it may transfer the ArrayBuffer
       const storedBytes = new Uint8Array(bytes)
       const pdf = await loadPdfDocumentFromBytes(bytes)
 
-      span.setAttribute('pageCount', pdf.numPages)
-      metrics.counter(SemanticMetrics.PDF_PLUGIN_LOADS_COUNT).add(1)
+      span.setAttribute(SemanticAttributes.PAGE_COUNT, pdf.numPages)
+      metrics.counter(Metrics.LOAD_COUNT).add(1)
       logger.debug({ bytes: bytes.length, pageCount: pdf.numPages }, 'PDF loaded')
 
       return {
@@ -134,8 +134,8 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
     const { tracer, metrics } = obs('pdf.plugin')
     const { pdf } = doc as PdfLoadedDocument
 
-    return tracer.startSpan(SpanNames.PDF_PLUGIN_PARSE, async (span) => {
-      span.setAttribute('pageCount', pdf.numPages)
+    return tracer.startSpan(Spans.PARSE, async (span) => {
+      span.setAttribute(SemanticAttributes.PAGE_COUNT, pdf.numPages)
       const units: PdfUnit[] = []
 
       for (let i = 0; i < pdf.numPages; i++) {
@@ -185,8 +185,8 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
         // Metadata extraction is optional
       }
 
-      span.setAttribute('unitCount', units.length)
-      metrics.counter(SemanticMetrics.PDF_PLUGIN_UNITS_COUNT).add(units.length)
+      span.setAttribute(SemanticAttributes.UNIT_COUNT, units.length)
+      metrics.counter(Metrics.UNIT_COUNT).add(units.length)
 
       return { units, metadata }
     })
@@ -196,17 +196,17 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
     const { tracer, metrics } = obs('pdf.plugin')
     const { pdf } = doc as PdfLoadedDocument
 
-    return tracer.startSpan(SpanNames.PDF_PLUGIN_ANALYZE_UNIT, async (span) => {
+    return tracer.startSpan(Spans.ANALYZE_UNIT, async (span) => {
       span.setAttribute('pageNumber', unit.pageNumber)
       const page = await pdf.getPage(unit.pageNumber)
 
       // Use existing analyzePage function
       const attrs = await analyzePage(page, unit.index)
 
-      span.setAttribute('charCount', attrs.charCount)
-      span.setAttribute('language', attrs.language)
+      span.setAttribute(SemanticAttributes.CHAR_COUNT, attrs.charCount)
+      span.setAttribute(SemanticAttributes.LANGUAGE, attrs.language)
       span.setAttribute('pageKind', attrs.kind)
-      metrics.counter(SemanticMetrics.PDF_PLUGIN_ANALYZE_PAGES_COUNT).add(1, { kind: attrs.kind })
+      metrics.counter(Metrics.ANALYZE_PAGE_COUNT).add(1, { kind: attrs.kind })
 
       // Update unit with analysis results
       return {
@@ -258,7 +258,7 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
       pageTimeout = DEFAULT_PAGE_TIMEOUT_MS,
     } = options
 
-    return tracer.startSpan(SpanNames.PDF_PLUGIN_EXTRACT_UNIT, async (span) => {
+    return tracer.startSpan(Spans.EXTRACT_UNIT, async (span) => {
       span.setAttribute('pageNumber', unit.pageNumber)
       span.setAttribute('kind', unit.kind)
 
@@ -267,7 +267,7 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
 
       // Scanned pages need OCR
       if (pageKind === 'scanned-image') {
-        span.setAttribute('method', 'ocr')
+        span.setAttribute(SemanticAttributes.METHOD, 'ocr')
         const runOcrLang =
           unit.language !== 'und' ? toTesseractLang(unit.language, ocrLang) : ocrLang
         const result = await ocrSinglePage(page, {
@@ -277,10 +277,10 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
         })
 
         const charCount = result.text.replace(/\s+/g, '').length
-        span.setAttribute('charCount', charCount)
-        span.setAttribute('confidence', result.confidence)
-        metrics.counter(SemanticMetrics.PDF_PLUGIN_EXTRACT_PAGES_COUNT).add(1, { method: 'ocr' })
-        metrics.histogram(SemanticMetrics.PDF_PLUGIN_EXTRACT_CHARS).record(charCount)
+        span.setAttribute(SemanticAttributes.CHAR_COUNT, charCount)
+        span.setAttribute(SemanticAttributes.CONFIDENCE, result.confidence)
+        metrics.counter(Metrics.EXTRACT_PAGE_COUNT).add(1, { method: 'ocr' })
+        metrics.histogram(Metrics.EXTRACT_CHARS).record(charCount)
 
         return {
           text: result.text,
@@ -296,7 +296,7 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
       }
 
       // Digital extraction for born-digital and mixed
-      span.setAttribute('method', 'digital')
+      span.setAttribute(SemanticAttributes.METHOD, 'digital')
       const extractDigital = async () => {
         const tc = await getPageTextContent(page, { normalizeWhitespace: true })
         return textItemsToString(tc?.items ?? [])
@@ -313,7 +313,7 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
         const nonWsChars = text.replace(/\s+/g, '').length
         if (nonWsChars < mixedFallbackToOcrIfUnderChars) {
           // Fall back to OCR
-          span.setAttribute('method', 'hybrid')
+          span.setAttribute(SemanticAttributes.METHOD, 'hybrid')
           logger.debug(
             { pageNumber: unit.pageNumber, nonWsChars },
             'Mixed page falling back to OCR',
@@ -328,12 +328,10 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
           })
 
           const charCount = result.text.replace(/\s+/g, '').length
-          span.setAttribute('charCount', charCount)
-          span.setAttribute('confidence', result.confidence)
-          metrics
-            .counter(SemanticMetrics.PDF_PLUGIN_EXTRACT_PAGES_COUNT)
-            .add(1, { method: 'hybrid' })
-          metrics.histogram(SemanticMetrics.PDF_PLUGIN_EXTRACT_CHARS).record(charCount)
+          span.setAttribute(SemanticAttributes.CHAR_COUNT, charCount)
+          span.setAttribute(SemanticAttributes.CONFIDENCE, result.confidence)
+          metrics.counter(Metrics.EXTRACT_PAGE_COUNT).add(1, { method: 'hybrid' })
+          metrics.histogram(Metrics.EXTRACT_CHARS).record(charCount)
 
           return {
             text: result.text,
@@ -350,9 +348,9 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
       }
 
       const charCount = text.replace(/\s+/g, '').length
-      span.setAttribute('charCount', charCount)
-      metrics.counter(SemanticMetrics.PDF_PLUGIN_EXTRACT_PAGES_COUNT).add(1, { method: 'digital' })
-      metrics.histogram(SemanticMetrics.PDF_PLUGIN_EXTRACT_CHARS).record(charCount)
+      span.setAttribute(SemanticAttributes.CHAR_COUNT, charCount)
+      metrics.counter(Metrics.EXTRACT_PAGE_COUNT).add(1, { method: 'digital' })
+      metrics.histogram(Metrics.EXTRACT_CHARS).record(charCount)
 
       return {
         text,
@@ -375,9 +373,9 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
       textForCjkDetection,
     } = options
 
-    return tracer.startSpan(SpanNames.PDF_PLUGIN_RENDER_UNIT, async (span) => {
+    return tracer.startSpan(Spans.RENDER_UNIT, async (span) => {
       span.setAttribute('pageNumber', unit.pageNumber)
-      span.setAttribute('scale', scale)
+      span.setAttribute(SemanticAttributes.SCALE, scale)
       span.setAttribute('playwrightMode', usePlaywright)
 
       // Determine if Playwright should be used
@@ -401,14 +399,12 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
           timeout: 30000,
         })
 
-        span.setAttribute('width', rendered.width)
-        span.setAttribute('height', rendered.height)
-        span.setAttribute('bytes', rendered.buffer.length)
+        span.setAttribute(SemanticAttributes.WIDTH, rendered.width)
+        span.setAttribute(SemanticAttributes.HEIGHT, rendered.height)
+        span.setAttribute(SemanticAttributes.BYTES, rendered.buffer.length)
         span.setAttribute('renderer', 'playwright')
-        metrics
-          .counter(SemanticMetrics.PDF_PLUGIN_RENDER_PAGES_COUNT)
-          .add(1, { renderer: 'playwright' })
-        metrics.histogram(SemanticMetrics.PDF_PLUGIN_RENDER_BYTES).record(rendered.buffer.length)
+        metrics.counter(Metrics.RENDER_PAGE_COUNT).add(1, { renderer: 'playwright' })
+        metrics.histogram(Metrics.RENDER_BYTES).record(rendered.buffer.length)
 
         return {
           base64: rendered.buffer.toString('base64'),
@@ -422,12 +418,12 @@ export const pdfPlugin: FormatPlugin<PdfUnit, PdfExtractOptions> = {
       const page = await pdf.getPage(unit.pageNumber)
       const rendered = await renderPage(page, { scale, format: 'png' })
 
-      span.setAttribute('width', rendered.width)
-      span.setAttribute('height', rendered.height)
-      span.setAttribute('bytes', rendered.buffer.length)
+      span.setAttribute(SemanticAttributes.WIDTH, rendered.width)
+      span.setAttribute(SemanticAttributes.HEIGHT, rendered.height)
+      span.setAttribute(SemanticAttributes.BYTES, rendered.buffer.length)
       span.setAttribute('renderer', 'canvas')
-      metrics.counter(SemanticMetrics.PDF_PLUGIN_RENDER_PAGES_COUNT).add(1, { renderer: 'canvas' })
-      metrics.histogram(SemanticMetrics.PDF_PLUGIN_RENDER_BYTES).record(rendered.buffer.length)
+      metrics.counter(Metrics.RENDER_PAGE_COUNT).add(1, { renderer: 'canvas' })
+      metrics.histogram(Metrics.RENDER_BYTES).record(rendered.buffer.length)
 
       return {
         base64: rendered.buffer.toString('base64'),

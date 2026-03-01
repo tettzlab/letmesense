@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config'
-import { baseTestConfig, coverageConfig, defaultExclude, plugins } from './vitest.shared'
+import { baseTestConfig, coverageConfig, defaultExclude } from './vitest.shared'
 
 /**
  * Default vitest configuration - fast tests for regular development.
@@ -12,12 +12,11 @@ import { baseTestConfig, coverageConfig, defaultExclude, plugins } from './vites
  *   pnpm test:full:cov → all tests with coverage
  */
 export default defineConfig({
-  plugins,
   test: {
     ...baseTestConfig,
     include: ['lib/**/*.test.ts'],
     exclude: [...defaultExclude, 'lib/office/vision/**/*.test.ts'],
-    testTimeout: 10000,
+    testTimeout: 5000,
     coverage: coverageConfig,
   },
 })

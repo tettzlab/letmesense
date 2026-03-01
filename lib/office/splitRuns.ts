@@ -17,8 +17,8 @@ export function generateRunKey(attrs: Pick<ContentAttributes, 'kind' | 'language
  * Split content attributes into homogeneous runs.
  *
  * A run groups consecutive content units that share the same:
- * - ContentKind (text-rich, image-heavy, mixed, empty, unknown)
- * - Language (for text-rich and mixed content)
+ * - ContentKind (text-only, image-only, mixed, empty, unknown)
+ * - Language (for text-only and mixed content)
  *
  * This allows batch processing of similar content types.
  *
@@ -28,17 +28,17 @@ export function generateRunKey(attrs: Pick<ContentAttributes, 'kind' | 'language
  * @example
  * ```ts
  * const attrs = [
- *   { unitIndex: 0, kind: 'text-rich', language: 'eng', ... },
- *   { unitIndex: 1, kind: 'text-rich', language: 'eng', ... },
- *   { unitIndex: 2, kind: 'image-heavy', language: 'und', ... },
- *   { unitIndex: 3, kind: 'text-rich', language: 'eng', ... },
+ *   { unitIndex: 0, kind: 'text-only', language: 'eng', ... },
+ *   { unitIndex: 1, kind: 'text-only', language: 'eng', ... },
+ *   { unitIndex: 2, kind: 'image-only', language: 'und', ... },
+ *   { unitIndex: 3, kind: 'text-only', language: 'eng', ... },
  * ]
  *
  * const runs = splitIntoRuns(attrs)
  * // [
- * //   { key: 'text-rich|eng', unitIndices: [0, 1], ... },
- * //   { key: 'image-heavy|und', unitIndices: [2], ... },
- * //   { key: 'text-rich|eng', unitIndices: [3], ... },
+ * //   { key: 'text-only|eng', unitIndices: [0, 1], ... },
+ * //   { key: 'image-only|und', unitIndices: [2], ... },
+ * //   { key: 'text-only|eng', unitIndices: [3], ... },
  * // ]
  * ```
  */
@@ -114,14 +114,14 @@ export function getUnitIndicesFromRuns(runs: ContentRun[]): number[] {
  * Get runs that contain extractable text.
  */
 export function getExtractableRuns(runs: ContentRun[]): ContentRun[] {
-  return filterRunsByKind(runs, ['text-rich', 'mixed'])
+  return filterRunsByKind(runs, ['text-only', 'mixed'])
 }
 
 /**
  * Get runs that require OCR for extraction.
  */
 export function getOcrRequiredRuns(runs: ContentRun[]): ContentRun[] {
-  return filterRunsByKind(runs, ['image-heavy'])
+  return filterRunsByKind(runs, ['image-only'])
 }
 
 /**
@@ -134,19 +134,19 @@ export function getRunStats(runs: ContentRun[]): {
   unitsByKind: Record<ContentKind, number>
 } {
   const runsByKind: Record<ContentKind, number> = {
-    'text-rich': 0,
-    'image-heavy': 0,
+    'text-only': 0,
+    'image-only': 0,
     mixed: 0,
-    table: 0,
+    tabular: 0,
     empty: 0,
     unknown: 0,
   }
 
   const unitsByKind: Record<ContentKind, number> = {
-    'text-rich': 0,
-    'image-heavy': 0,
+    'text-only': 0,
+    'image-only': 0,
     mixed: 0,
-    table: 0,
+    tabular: 0,
     empty: 0,
     unknown: 0,
   }

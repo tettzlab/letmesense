@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PDFPageProxy } from './pdfjs.js'
 
 // Mock dependencies before importing the module under test
@@ -37,6 +36,10 @@ import { classifyPageKind } from './classify.js'
 import { estimateImageCoverageFromPage } from './imageCoverage.js'
 import { getPageTextContent } from './pdfjsTypes.js'
 
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
 describe('analyzePage', () => {
   // Mock page factory
   const createMockPage = (overrides: Partial<PDFPageProxy> = {}): PDFPageProxy =>
@@ -48,14 +51,6 @@ describe('analyzePage', () => {
       getTextContent: vi.fn().mockResolvedValue({ items: [] }),
       ...overrides,
     }) as unknown as PDFPageProxy
-
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
 
   describe('geometry extraction', () => {
     it('extracts portrait orientation for tall pages', async () => {

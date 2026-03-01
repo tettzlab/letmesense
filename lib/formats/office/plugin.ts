@@ -7,12 +7,12 @@
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { obs } from '../../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../../observability/types.js'
-import { analyzeDocument } from '../../office/analyze.js'
+import { DEFAULT_FETCH_TIMEOUT_MS, DEFAULT_PAGE_TIMEOUT_MS } from '../../common/timeouts.js'
+import { obs, SemanticAttributes } from '../../observability/index.js'
+import { analyzeSingleUnit } from '../../office/analyze.js'
 import { classifyContentKind } from '../../office/classify.js'
 import { checkLibreOffice, convertToPdf } from '../../office/convert/libreoffice.js'
-import { extractText } from '../../office/extractText.js'
+import { extractSingleUnit } from '../../office/extractText.js'
 import {
   detectFormatFromExtension,
   type LoadResult,
@@ -31,19 +31,14 @@ import { cleanupPdfDocument } from '../../pdf/pdfjsTypes.js'
 import { renderPage } from '../../pdf/render.js'
 import type { CliOption, FormatPlugin, RenderedContent } from '../../pipeline/plugin.js'
 import type { ContentKind, FormatId, UnitExtractionResult } from '../../pipeline/types.js'
-import {
-  mapOfficeKindToContentKind,
-  type OfficeExtractOptions,
-  type OfficeLoadedDocument,
-  type OfficeUnit,
-} from './types.js'
+import { Metrics, Spans } from './signals.js'
+import type { OfficeExtractOptions, OfficeLoadedDocument, OfficeUnit } from './types.js'
 
 // ============================================================================
 // Constants
 // ============================================================================
 
-const DEFAULT_FETCH_TIMEOUT_MS = 30000
-const DEFAULT_UNIT_TIMEOUT_MS = 60000
+const DEFAULT_UNIT_TIMEOUT_MS = DEFAULT_PAGE_TIMEOUT_MS
 const DEFAULT_VISION_RENDER_SCALE = 2.0
 
 /** Map Office format to file extension */
@@ -104,14 +99,14 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
     const { tracer, metrics, logger } = obs('office.plugin')
     const { fetchTimeout = DEFAULT_FETCH_TIMEOUT_MS, format: optionsFormat } = options
 
-    return tracer.startSpan(SpanNames.OFFICE_PLUGIN_LOAD, async (span) => {
+    return tracer.startSpan(Spans.LOAD, async (span) => {
       const inputType =
         input instanceof Uint8Array || Buffer.isBuffer(input)
           ? 'buffer'
           : typeof input === 'string' && input.startsWith('http')
             ? 'url'
             : 'file'
-      span.setAttribute('inputType', inputType)
+      span.setAttribute(SemanticAttributes.INPUT_TYPE, inputType)
 
       // Detect format for buffer inputs
       let formatHint: OfficeFormat | undefined
@@ -136,8 +131,8 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
       }
 
       const { bytes, format, source } = loadResult
-      span.setAttribute('format', format)
-      span.setAttribute('bytes', bytes.length)
+      span.setAttribute(SemanticAttributes.FORMAT, format)
+      span.setAttribute(SemanticAttributes.BYTES, bytes.length)
 
       // Parse the document
       const parsed = await parseOfficeBuffer(bytes, {
@@ -174,8 +169,8 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
         filePath = tempFilePath
       }
 
-      metrics.counter(SemanticMetrics.OFFICE_PLUGIN_LOADS_COUNT).add(1, { format })
-      metrics.histogram(SemanticMetrics.OFFICE_PLUGIN_LOAD_BYTES).record(bytes.length, { format })
+      metrics.counter(Metrics.LOAD_COUNT).add(1, { format })
+      metrics.histogram(Metrics.LOAD_BYTES).record(bytes.length, { format })
       logger.debug({ format, bytes: bytes.length, source }, 'Office document loaded')
 
       return {
@@ -194,8 +189,8 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
     const { tracer, metrics } = obs('office.plugin')
     const { parsed, officeFormat } = doc as OfficeLoadedDocument
 
-    return tracer.startSpan(SpanNames.OFFICE_PLUGIN_PARSE, async (span) => {
-      span.setAttribute('format', officeFormat)
+    return tracer.startSpan(Spans.PARSE, async (span) => {
+      span.setAttribute(SemanticAttributes.FORMAT, officeFormat)
       const contentUnits = getContentUnits(parsed, officeFormat)
       const units: OfficeUnit[] = []
 
@@ -229,10 +224,8 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
         revision: docMetadata.revision,
       }
 
-      span.setAttribute('unitCount', units.length)
-      metrics
-        .counter(SemanticMetrics.OFFICE_PLUGIN_UNITS_COUNT)
-        .add(units.length, { format: officeFormat })
+      span.setAttribute(SemanticAttributes.UNIT_COUNT, units.length)
+      metrics.counter(Metrics.UNIT_COUNT).add(units.length, { format: officeFormat })
 
       return { units, metadata }
     })
@@ -242,16 +235,13 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
     const { tracer, metrics } = obs('office.plugin')
     const { parsed, officeFormat } = doc as OfficeLoadedDocument
 
-    return tracer.startSpan(SpanNames.OFFICE_PLUGIN_ANALYZE_UNIT, async (span) => {
-      span.setAttribute('unitIndex', unit.index)
-      span.setAttribute('format', officeFormat)
+    return tracer.startSpan(Spans.ANALYZE_UNIT, async (span) => {
+      span.setAttribute(SemanticAttributes.UNIT_INDEX, unit.index)
+      span.setAttribute(SemanticAttributes.FORMAT, officeFormat)
 
-      // Use existing analyzeDocument to analyze all units, then extract the one we need
-      // This is slightly inefficient but ensures consistency with existing logic
-      const allAttributes = await analyzeDocument(parsed, officeFormat)
-      const attr = allAttributes[unit.index]
+      const attr = analyzeSingleUnit(parsed, unit.index, officeFormat)
 
-      if (!attr) {
+      if (!attr || attr.error) {
         span.setAttribute('kind', 'unknown')
         return {
           ...unit,
@@ -260,12 +250,10 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
         }
       }
 
-      span.setAttribute('charCount', attr.charCount)
+      span.setAttribute(SemanticAttributes.CHAR_COUNT, attr.charCount)
       span.setAttribute('kind', attr.kind)
-      span.setAttribute('language', attr.language)
-      metrics
-        .counter(SemanticMetrics.OFFICE_PLUGIN_ANALYZE_UNITS_COUNT)
-        .add(1, { format: officeFormat, kind: attr.kind })
+      span.setAttribute(SemanticAttributes.LANGUAGE, attr.language)
+      metrics.counter(Metrics.ANALYZE_UNIT_COUNT).add(1, { format: officeFormat, kind: attr.kind })
 
       // Map format-specific attributes
       const updated: OfficeUnit = {
@@ -276,7 +264,7 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
         unitLabel: attr.unitLabel,
         imageCount: attr.imageCount,
         officeKind: attr.kind,
-        kind: mapOfficeKindToContentKind(attr.kind),
+        kind: attr.kind,
       }
 
       // Add format-specific fields
@@ -299,12 +287,10 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
   },
 
   classifyUnit(unit): ContentKind {
-    // Re-classify using the classify function for consistency
-    const officeKind = classifyContentKind({
+    return classifyContentKind({
       charCount: unit.charCount,
       imageCount: unit.imageCount,
     })
-    return mapOfficeKindToContentKind(officeKind)
   },
 
   buildRunKey(unit): string {
@@ -317,43 +303,21 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
     const { parsed, officeFormat } = doc as OfficeLoadedDocument
     const { includeNotes = true, unitTimeout = DEFAULT_UNIT_TIMEOUT_MS } = options
 
-    return tracer.startSpan(SpanNames.OFFICE_PLUGIN_EXTRACT_UNIT, async (span) => {
-      span.setAttribute('unitIndex', unit.index)
-      span.setAttribute('format', officeFormat)
+    return tracer.startSpan(Spans.EXTRACT_UNIT, async (span) => {
+      span.setAttribute(SemanticAttributes.UNIT_INDEX, unit.index)
+      span.setAttribute(SemanticAttributes.FORMAT, officeFormat)
       span.setAttribute('kind', unit.kind)
 
-      // Get all attributes (we need them for extractText)
-      const allAttributes = await analyzeDocument(parsed, officeFormat)
-
-      // Extract just this unit
-      const extracted = await extractText(parsed, officeFormat, allAttributes, {
+      const extracted = extractSingleUnit(parsed, unit.index, officeFormat, unit.kind, {
         includeNotes,
         unitTimeout,
       })
 
-      const unitExtracted = extracted.find((e) => e.unitIndex === unit.index)
-
-      if (!unitExtracted) {
-        span.setAttribute('charCount', 0)
-        span.setAttribute('status', 'not_found')
+      if (extracted.error) {
+        span.setAttribute(SemanticAttributes.CHAR_COUNT, 0)
+        span.setAttribute(SemanticAttributes.STATUS, 'error')
         metrics
-          .counter(SemanticMetrics.OFFICE_PLUGIN_EXTRACT_UNITS_COUNT)
-          .add(1, { format: officeFormat, status: 'not_found' })
-        return {
-          text: '',
-          charCount: 0,
-          extraction: {
-            method: 'digital',
-            reliability: 'low',
-          },
-        }
-      }
-
-      if (unitExtracted.error) {
-        span.setAttribute('charCount', 0)
-        span.setAttribute('status', 'error')
-        metrics
-          .counter(SemanticMetrics.OFFICE_PLUGIN_EXTRACT_UNITS_COUNT)
+          .counter(Metrics.EXTRACT_UNIT_COUNT)
           .add(1, { format: officeFormat, status: 'error' })
         return {
           text: '',
@@ -365,18 +329,16 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
         }
       }
 
-      const charCount = unitExtracted.text.replace(/\s+/g, '').length
-      span.setAttribute('charCount', charCount)
-      span.setAttribute('status', 'success')
+      const charCount = extracted.text.replace(/\s+/g, '').length
+      span.setAttribute(SemanticAttributes.CHAR_COUNT, charCount)
+      span.setAttribute(SemanticAttributes.STATUS, 'success')
       metrics
-        .counter(SemanticMetrics.OFFICE_PLUGIN_EXTRACT_UNITS_COUNT)
+        .counter(Metrics.EXTRACT_UNIT_COUNT)
         .add(1, { format: officeFormat, status: 'success' })
-      metrics
-        .histogram(SemanticMetrics.OFFICE_PLUGIN_EXTRACT_CHARS)
-        .record(charCount, { format: officeFormat })
+      metrics.histogram(Metrics.EXTRACT_CHARS).record(charCount, { format: officeFormat })
 
       return {
-        text: unitExtracted.text,
+        text: extracted.text,
         charCount,
         extraction: {
           method: 'digital',
@@ -391,10 +353,10 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
     const officeDoc = doc as OfficeLoadedDocument
     const { scale = DEFAULT_VISION_RENDER_SCALE } = options
 
-    return tracer.startSpan(SpanNames.OFFICE_PLUGIN_RENDER_UNIT, async (span) => {
-      span.setAttribute('unitIndex', unit.index)
-      span.setAttribute('format', officeDoc.officeFormat)
-      span.setAttribute('scale', scale)
+    return tracer.startSpan(Spans.RENDER_UNIT, async (span) => {
+      span.setAttribute(SemanticAttributes.UNIT_INDEX, unit.index)
+      span.setAttribute(SemanticAttributes.FORMAT, officeDoc.officeFormat)
+      span.setAttribute(SemanticAttributes.SCALE, scale)
 
       // Check LibreOffice availability
       const status = checkLibreOffice()
@@ -412,8 +374,8 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
 
       // Convert to PDF if not already cached
       if (!officeDoc.cachedPdf) {
-        await tracer.startSpan(SpanNames.OFFICE_PLUGIN_CONVERT_TO_PDF, async (convertSpan) => {
-          convertSpan.setAttribute('format', officeDoc.officeFormat)
+        await tracer.startSpan(Spans.CONVERT_TO_PDF, async (convertSpan) => {
+          convertSpan.setAttribute(SemanticAttributes.FORMAT, officeDoc.officeFormat)
           const tempDir = join(tmpdir(), `office-pdf-${Date.now()}`)
           await mkdir(tempDir, { recursive: true })
 
@@ -438,18 +400,20 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
               pageCount,
             }
 
-            convertSpan.setAttribute('pageCount', pageCount)
+            convertSpan.setAttribute(SemanticAttributes.PAGE_COUNT, pageCount)
             convertSpan.setAttribute('pdfBytes', pdfArray.length)
-            metrics
-              .counter(SemanticMetrics.OFFICE_PLUGIN_PDF_CONVERSIONS_COUNT)
-              .add(1, { format: officeDoc.officeFormat })
+            metrics.counter(Metrics.PDF_CONVERSION_COUNT).add(1, { format: officeDoc.officeFormat })
             logger.debug({ format: officeDoc.officeFormat, pageCount }, 'Converted to PDF')
 
             // Clean up temp PDF directory
-            await rm(tempDir, { recursive: true, force: true }).catch(() => {})
+            await rm(tempDir, { recursive: true, force: true }).catch((e) => {
+              logger.warn({ err: e, tempDir }, 'Failed to clean up temp directory')
+            })
           } catch (err) {
             // Clean up on error
-            await rm(tempDir, { recursive: true, force: true }).catch(() => {})
+            await rm(tempDir, { recursive: true, force: true }).catch((e) => {
+              logger.warn({ err: e, tempDir }, 'Failed to clean up temp directory on error')
+            })
             throw new Error(
               `Failed to convert document to PDF: ${err instanceof Error ? err.message : String(err)}`,
             )
@@ -473,14 +437,12 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
       const page = await cachedPdf.doc.getPage(pageNumber)
       const rendered = await renderPage(page, { scale, format: 'png' })
 
-      span.setAttribute('width', rendered.width)
-      span.setAttribute('height', rendered.height)
-      span.setAttribute('bytes', rendered.buffer.length)
+      span.setAttribute(SemanticAttributes.WIDTH, rendered.width)
+      span.setAttribute(SemanticAttributes.HEIGHT, rendered.height)
+      span.setAttribute(SemanticAttributes.BYTES, rendered.buffer.length)
+      metrics.counter(Metrics.RENDER_UNIT_COUNT).add(1, { format: officeDoc.officeFormat })
       metrics
-        .counter(SemanticMetrics.OFFICE_PLUGIN_RENDER_UNITS_COUNT)
-        .add(1, { format: officeDoc.officeFormat })
-      metrics
-        .histogram(SemanticMetrics.OFFICE_PLUGIN_RENDER_BYTES)
+        .histogram(Metrics.RENDER_BYTES)
         .record(rendered.buffer.length, { format: officeDoc.officeFormat })
 
       return {

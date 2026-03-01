@@ -5,29 +5,34 @@
  * For server-only exports (registry, stream wrappers), use `index.server.ts`.
  */
 
-// Config exports (types and constants)
+// Config exports (types and getter functions)
 // Resolve utilities
 export {
+  _resetRegistryCache,
   buildProviderOptions,
-  DEFAULT_PROVIDER,
-  FLAT_MODELS,
   type FlatModel,
-  FREE_TIER_MODELS,
-  FREE_TIER_MODELS_BY_PROVIDER,
+  getDefaultProvider,
+  getFlatModels,
+  getFreeTierModels,
+  getFreeTierModelsByProvider,
+  getModelAliases,
+  getModelRegistry,
   getModelSpecExamples,
+  getModels,
+  getProviderChoices,
+  getProviderRegistry,
+  getProviders,
+  initModelRegistry,
   isFreeTierModel,
   type JsonValue,
-  MODEL_ALIASES,
-  MODELS,
+  type ModelRegistryInit,
   modelSupportsPdf,
   modelSupportsVision,
   type ParsedModelSpec,
   ParseModelSpecError,
-  PROVIDERS,
   type ProviderId,
   type ProviderOptions,
   parseModelSpec,
-  providerChoices,
   type ResolvedModel,
   ResolveModelError,
   type ResolveModelErrorCode,

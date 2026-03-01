@@ -3,13 +3,73 @@
  * Format-agnostic abstractions that plugins implement.
  */
 
-import type { PromptPreset } from '../ai/prompts.js'
-import type { JournalCallback } from '../ai/types.js'
 import type { Lang } from '../common/types.js'
+import type { PromptPreset } from './prompts.js'
 
 export type { PromptPreset }
 
 export type { Lang }
+
+// ============================================================================
+// Domain-Specific Contexts (for LLM journaling and prompt substitution)
+// ============================================================================
+
+/** Page context for prompt template variables (PDF-specific) */
+export interface PageContext {
+  /** Extracted text for the current page */
+  text: string
+  /** Current page number (1-indexed) */
+  page: number
+  /** Total page count */
+  totalPages: number
+  /** Detected language (ISO 639-3) */
+  language: string
+  /** Page classification */
+  pageKind: string
+  /** Last ~200 chars of previous page for continuity */
+  previousTail: string
+  /** Current run index */
+  runIndex: number
+  /** Allow additional properties for extensibility */
+  [key: string]: unknown
+}
+
+/** Office unit context for journaling (DOCX/PPTX/XLSX) */
+export interface OfficeUnitContext {
+  /** Unit index (0-indexed) */
+  unitIndex: number
+  /** Human-readable unit label (e.g., "Slide 1", "Sheet 2") */
+  unitLabel: string
+  /** Office format (docx, pptx, xlsx, etc.) */
+  format: string
+  /** Total number of units */
+  totalUnits: number
+  /** Content kind classification */
+  contentKind?: string
+  /** Extracted text content */
+  text: string
+  /** Allow additional properties for extensibility */
+  [key: string]: unknown
+}
+
+/** Image context for journaling */
+export interface ImageContext {
+  /** File path of the image */
+  filePath: string
+  /** Image width in pixels */
+  width: number
+  /** Image height in pixels */
+  height: number
+  /** MIME type (e.g., 'image/png') */
+  mimeType: string
+  /** Text content (empty for images) */
+  text: string
+  /** Allow additional properties for extensibility */
+  [key: string]: unknown
+}
+
+/** Union type for all journal context types */
+export type JournalContext = PageContext | OfficeUnitContext | ImageContext
 
 // ============================================================================
 // Content Classification
@@ -32,7 +92,7 @@ export type ContentKind =
 // ============================================================================
 
 /** Supported document formats */
-export type FormatId = 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'image'
+export type FormatId = 'pdf' | 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods' | 'image' | 'html'
 
 // ============================================================================
 // Document Units
@@ -308,7 +368,7 @@ export interface VisionExtractOptions extends ExtractAllOptions {
   experiment?: string
 
   /** Journal callback for logging LLM calls */
-  onJournal?: JournalCallback
+  onJournal?: import('../ai/types.js').JournalCallback
 }
 
 // ============================================================================
@@ -319,6 +379,7 @@ export interface VisionExtractOptions extends ExtractAllOptions {
  * Chunk types emitted during vision extraction streaming.
  */
 export type VisionChunk =
+  | { type: 'metadata'; metadata: Record<string, unknown>; format: FormatId }
   | { type: 'unit-start'; unitIndex: number; label: string }
   | { type: 'content'; content: string; unitIndex: number }
   | { type: 'unit-done'; unitIndex: number; charCount: number }

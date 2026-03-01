@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { afterEach, describe, expect, test, vi } from 'vitest'
 import {
   extractFromPdfBatch,
   extractTextFromBytes,
@@ -8,6 +7,26 @@ import {
   extractTextFromUrl,
 } from './convenience.js'
 import { PdfExtractionError } from './errors.js'
+import { extractFromPdf } from './extractAll.js'
+
+// Mock extractAll so we can override extractFromPdf for the concurrency test.
+// By default the mock delegates to the real implementation.
+const { _realExtract } = vi.hoisted(() => ({
+  _realExtract: { fn: null as any },
+}))
+
+vi.mock('./extractAll.js', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('./extractAll.js')>()
+  _realExtract.fn = mod.extractFromPdf
+  return {
+    ...mod,
+    extractFromPdf: vi.fn(mod.extractFromPdf),
+  }
+})
+
+afterEach(() => {
+  vi.mocked(extractFromPdf).mockImplementation(_realExtract.fn)
+})
 
 const SAMPLES = {
   bornDigital: path.resolve('samples/born-digital.pdf'),
@@ -32,14 +51,10 @@ describe('extractTextFromFile', () => {
     })
     expect(result.metadata).toBeDefined()
     expect(result.metadata?.source).toBe('file')
-  })
+  }, 30000)
 })
 
 describe('extractTextFromUrl', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   test('extracts text from valid URL', async () => {
     const mockBytes = new Uint8Array(await fs.readFile(SAMPLES.bornDigital))
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
@@ -108,7 +123,7 @@ describe('extractFromPdfBatch', () => {
     expect(results[1].result?.text).toBeTruthy()
     expect(results[0].error).toBeUndefined()
     expect(results[1].error).toBeUndefined()
-  })
+  }, 30000)
 
   test('handles mixed success and failure', async () => {
     const results = await extractFromPdfBatch([
@@ -124,20 +139,18 @@ describe('extractFromPdfBatch', () => {
     expect(results[1].error).toBeDefined()
     expect(results[2].result?.text).toBeTruthy()
     expect(results[2].error).toBeUndefined()
-  })
+  }, 30000)
 
   test('respects concurrency limit', async () => {
     let maxConcurrent = 0
     let currentConcurrent = 0
 
-    const originalReadFile = fs.readFile
-    vi.spyOn(fs, 'readFile').mockImplementation(async (...args) => {
+    vi.mocked(extractFromPdf).mockImplementation(async () => {
       currentConcurrent++
       maxConcurrent = Math.max(maxConcurrent, currentConcurrent)
-      const result = await originalReadFile.apply(fs, args as Parameters<typeof originalReadFile>)
-      await new Promise((r) => setTimeout(r, 50)) // Small delay to test concurrency
+      await new Promise((r) => setTimeout(r, 100))
       currentConcurrent--
-      return result
+      return { text: 'mock', pages: [] } as any
     })
 
     await extractFromPdfBatch(
@@ -147,7 +160,6 @@ describe('extractFromPdfBatch', () => {
 
     // With concurrency 2, we shouldn't see more than 2 concurrent operations
     expect(maxConcurrent).toBeLessThanOrEqual(2)
-    vi.restoreAllMocks()
   })
 
   test('calls onProgress callback', async () => {

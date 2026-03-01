@@ -2,14 +2,16 @@
  * Main orchestration for LLM-powered markdown formatting
  */
 
-import { obs, SemanticMetrics } from '../observability/index.js'
-import { SpanNames } from '../observability/types.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
+// Re-export extractPreviousTail from pipeline (canonical location)
+import { extractPreviousTail } from '../pipeline/prompts.js'
 import { estimateCost } from './cost.js'
 import { calculateEntryCost, createJournalEntry } from './journal.js'
 import { DEFAULT_TEXT_PROMPT, DEFAULT_VISION_PROMPT, substituteVariables } from './prompts.js'
 import { buildConfig, getProvider, resolveProvider } from './provider.js'
 import { buildProviderOptions } from './providerOptions.js'
 import { resolveModel as resolveModelFull } from './resolve.js'
+import { Metrics, Spans } from './signals.js'
 import type {
   CostBreakdown,
   CostEstimate,
@@ -22,48 +24,6 @@ import type {
 
 /** Default page separator in formatted output */
 export const DEFAULT_MARKDOWN_PAGE_SEPARATOR = '\n\n---\n\n'
-
-/** Maximum characters to use for previousTail context */
-const PREVIOUS_TAIL_MAX_LENGTH = 200
-
-/**
- * Extract a clean tail from content for continuity context.
- * Finds a natural break point (sentence/paragraph end, word boundary)
- * to avoid cutting in the middle of words or markdown structures.
- */
-export function extractPreviousTail(content: string, maxLength = PREVIOUS_TAIL_MAX_LENGTH): string {
-  if (content.length <= maxLength) {
-    return content
-  }
-
-  // Start from the last maxLength characters
-  let tail = content.slice(-maxLength)
-
-  // Try to find a natural break point (paragraph, sentence, or word boundary)
-  // Priority: paragraph > sentence > word
-
-  // Look for paragraph break (double newline)
-  const paragraphBreak = tail.indexOf('\n\n')
-  if (paragraphBreak !== -1 && paragraphBreak < maxLength * 0.5) {
-    // Found a paragraph break in the first half, use content after it
-    tail = tail.slice(paragraphBreak + 2)
-  } else {
-    // Look for sentence break (. ! ? followed by space or newline)
-    const sentenceMatch = tail.match(/[.!?][\s\n]/)
-    if (sentenceMatch?.index !== undefined && sentenceMatch.index < maxLength * 0.3) {
-      // Found sentence end in the first third, use content after it
-      tail = tail.slice(sentenceMatch.index + 2)
-    } else {
-      // Fall back to word boundary (space after first 10 chars to ensure some content)
-      const spaceIndex = tail.indexOf(' ', 10)
-      if (spaceIndex !== -1 && spaceIndex < maxLength * 0.2) {
-        tail = tail.slice(spaceIndex + 1)
-      }
-    }
-  }
-
-  return tail.trim()
-}
 
 /** Result of formatting a single page */
 export interface PageFormatResult {
@@ -139,10 +99,10 @@ export async function formatPage(
   if (!provider) throw new Error(`Provider '${config.provider}' not registered`)
   const model = config.model ?? provider.defaultModel
 
-  return tracer.startSpan(SpanNames.AI_FORMAT_PAGE, async (span) => {
+  return tracer.startSpan(Spans.FORMAT_PAGE, async (span) => {
     span.setAttribute('pageIndex', page.pageIndex)
-    span.setAttribute('provider', provider.name)
-    span.setAttribute('model', model)
+    span.setAttribute(SemanticAttributes.PROVIDER, provider.name)
+    span.setAttribute(SemanticAttributes.MODEL, model)
 
     const context: PageContext = {
       text: page.text,
@@ -172,19 +132,19 @@ export async function formatPage(
 
     // Record metrics
     metrics
-      .counter(SemanticMetrics.AI_REQUEST_COUNT)
+      .counter(Metrics.REQUEST_COUNT)
       .add(1, { provider: provider.name, model, status: 'success' })
-    metrics.histogram(SemanticMetrics.AI_TOKEN_INPUT_COUNT).record(response.usage.inputTokens)
-    metrics.histogram(SemanticMetrics.AI_TOKEN_OUTPUT_COUNT).record(response.usage.outputTokens)
-    metrics.histogram(SemanticMetrics.AI_REQUEST_DURATION_MS).record(durationMs)
+    metrics.histogram(Metrics.TOKEN_INPUT_COUNT).record(response.usage.inputTokens)
+    metrics.histogram(Metrics.TOKEN_OUTPUT_COUNT).record(response.usage.outputTokens)
+    metrics.histogram(Metrics.REQUEST_DURATION_MS).record(durationMs)
 
     // Calculate and record cost
     const pricing = provider.getPricing(model)
     const cost = calculateEntryCost(response.usage, pricing)
-    metrics.histogram(SemanticMetrics.AI_COST_USD).record(cost.total)
+    metrics.histogram(Metrics.COST_USD).record(cost.total)
 
-    span.setAttribute('inputTokens', response.usage.inputTokens)
-    span.setAttribute('outputTokens', response.usage.outputTokens)
+    span.setAttribute(SemanticAttributes.INPUT_TOKENS, response.usage.inputTokens)
+    span.setAttribute(SemanticAttributes.OUTPUT_TOKENS, response.usage.outputTokens)
 
     // Journal the LLM call if experiment is enabled
     if (options.experiment && options.onJournal) {
@@ -242,11 +202,11 @@ export async function formatPageStream(
   if (!provider) throw new Error(`Provider '${config.provider}' not registered`)
   const model = config.model ?? provider.defaultModel
 
-  return tracer.startSpan(SpanNames.AI_FORMAT_PAGE, async (span) => {
+  return tracer.startSpan(Spans.FORMAT_PAGE, async (span) => {
     span.setAttribute('pageIndex', page.pageIndex)
-    span.setAttribute('provider', provider.name)
-    span.setAttribute('model', model)
-    span.setAttribute('streaming', true)
+    span.setAttribute(SemanticAttributes.PROVIDER, provider.name)
+    span.setAttribute(SemanticAttributes.MODEL, model)
+    span.setAttribute(SemanticAttributes.STREAMING, true)
 
     const context: PageContext = {
       text: page.text,
@@ -276,19 +236,19 @@ export async function formatPageStream(
 
     // Record metrics
     metrics
-      .counter(SemanticMetrics.AI_REQUEST_COUNT)
+      .counter(Metrics.REQUEST_COUNT)
       .add(1, { provider: provider.name, model, status: 'success' })
-    metrics.histogram(SemanticMetrics.AI_TOKEN_INPUT_COUNT).record(response.usage.inputTokens)
-    metrics.histogram(SemanticMetrics.AI_TOKEN_OUTPUT_COUNT).record(response.usage.outputTokens)
-    metrics.histogram(SemanticMetrics.AI_REQUEST_DURATION_MS).record(durationMs)
+    metrics.histogram(Metrics.TOKEN_INPUT_COUNT).record(response.usage.inputTokens)
+    metrics.histogram(Metrics.TOKEN_OUTPUT_COUNT).record(response.usage.outputTokens)
+    metrics.histogram(Metrics.REQUEST_DURATION_MS).record(durationMs)
 
     // Calculate and record cost
     const pricing = provider.getPricing(model)
     const cost = calculateEntryCost(response.usage, pricing)
-    metrics.histogram(SemanticMetrics.AI_COST_USD).record(cost.total)
+    metrics.histogram(Metrics.COST_USD).record(cost.total)
 
-    span.setAttribute('inputTokens', response.usage.inputTokens)
-    span.setAttribute('outputTokens', response.usage.outputTokens)
+    span.setAttribute(SemanticAttributes.INPUT_TOKENS, response.usage.inputTokens)
+    span.setAttribute(SemanticAttributes.OUTPUT_TOKENS, response.usage.outputTokens)
 
     // Journal the LLM call if experiment is enabled
     if (options.experiment && options.onJournal) {
@@ -370,6 +330,8 @@ export async function formatPages(
   }
 
   for (const page of pages) {
+    options.signal?.throwIfAborted()
+
     // Emit page-start event
     if (onProgress) {
       const event: StreamEvent = { type: 'page-start', pageIndex: page.pageIndex }
@@ -486,9 +448,9 @@ export async function formatAsMarkdown(
 ): Promise<DocumentFormatResult> {
   const { logger, tracer } = obs('ai')
 
-  return tracer.startSpan(SpanNames.AI_FORMAT, async (span) => {
-    span.setAttribute('pageCount', pages.length)
-    span.setAttribute('format', options.format)
+  return tracer.startSpan(Spans.FORMAT, async (span) => {
+    span.setAttribute(SemanticAttributes.PAGE_COUNT, pages.length)
+    span.setAttribute(SemanticAttributes.FORMAT, options.format)
 
     if (options.format !== 'markdown') {
       logger.error({ format: options.format }, 'Invalid format for markdown formatting')
@@ -498,8 +460,8 @@ export async function formatAsMarkdown(
     logger.info({ pageCount: pages.length }, 'Starting LLM markdown formatting')
     const result = await formatPages(pages, options)
 
-    span.setAttribute('totalInputTokens', result.totalUsage.inputTokens)
-    span.setAttribute('totalOutputTokens', result.totalUsage.outputTokens)
+    span.setAttribute(SemanticAttributes.TOTAL_INPUT_TOKENS, result.totalUsage.inputTokens)
+    span.setAttribute(SemanticAttributes.TOTAL_OUTPUT_TOKENS, result.totalUsage.outputTokens)
 
     return result
   })

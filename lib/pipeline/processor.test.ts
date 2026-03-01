@@ -1,60 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createMockPlugin, createUnit } from '../testing/index.js'
 import { AbortError, ExtractError, LoadError } from './errors.js'
-import type { FormatPlugin, LoadedDocument, ParsedDocument } from './plugin.js'
 import { PipelineProcessor } from './processor.js'
 import { PluginRegistry } from './registry.js'
-import type { ContentKind, DocumentUnit } from './types.js'
-
-// Helper to create a mock unit
-function createUnit(
-  index: number,
-  kind: ContentKind = 'text-only',
-  language = 'eng',
-): DocumentUnit {
-  return {
-    index,
-    label: `Unit ${index}`,
-    kind,
-    charCount: 100,
-    language,
-    textSample: 'Sample text',
-  }
-}
-
-// Helper to create a mock plugin
-function createMockPlugin(overrides: Partial<FormatPlugin> = {}): FormatPlugin {
-  return {
-    id: 'pdf',
-    name: 'Mock Plugin',
-    extensions: ['.mock'],
-    mimeTypes: ['application/mock'],
-    capabilities: {
-      ocr: false,
-      vision: false,
-      streaming: false,
-      parallel: true,
-      supportsRuns: true,
-      multiUnit: true,
-    },
-    load: vi.fn().mockResolvedValue({
-      bytes: new Uint8Array([1, 2, 3]),
-      format: 'pdf',
-    } as LoadedDocument),
-    parse: vi.fn().mockResolvedValue({
-      units: [createUnit(0), createUnit(1), createUnit(2)],
-      metadata: { title: 'Test Document' },
-    } as ParsedDocument),
-    analyzeUnit: vi.fn().mockImplementation((unit) => Promise.resolve(unit)),
-    classifyUnit: vi.fn().mockReturnValue('text-only'),
-    extractUnit: vi.fn().mockResolvedValue({
-      text: 'Extracted text',
-      charCount: 14,
-      extraction: { method: 'digital', reliability: 'exact' },
-    }),
-    buildRunKey: vi.fn().mockImplementation((unit) => `${unit.kind}|${unit.language}`),
-    ...overrides,
-  }
-}
+import type { FormatId } from './types.js'
 
 describe('PipelineProcessor', () => {
   let registry: PluginRegistry
@@ -674,6 +622,156 @@ describe('PipelineProcessor', () => {
       ).rejects.toThrow(AbortError)
 
       expect(cleanup).toHaveBeenCalled()
+    })
+  })
+
+  describe('URL resolution', () => {
+    const HTML_CONTENT = '<html><body><p>Hello</p></body></html>'
+    const htmlBytes = new TextEncoder().encode(HTML_CONTENT)
+
+    function mockFetch(options: {
+      ok?: boolean
+      status?: number
+      statusText?: string
+      contentType?: string
+      body?: Uint8Array
+      responseUrl?: string
+    }) {
+      const {
+        ok = true,
+        status = 200,
+        statusText = 'OK',
+        contentType = 'text/html',
+        body = htmlBytes,
+        responseUrl,
+      } = options
+
+      return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok,
+        status,
+        statusText,
+        url: responseUrl ?? '',
+        headers: new Headers({ 'content-type': contentType }),
+        arrayBuffer: () => Promise.resolve(body.buffer.slice(0)),
+      } as Response)
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('resolves HTTP URL and detects format from Content-Type', async () => {
+      const fetchSpy = mockFetch({ contentType: 'text/html; charset=utf-8' })
+
+      // Register HTML plugin that records load input
+      let loadedInput: unknown
+      const plugin = createMockPlugin({
+        id: 'html' as FormatId,
+        extensions: ['.html'],
+        mimeTypes: ['text/html'],
+        load: vi.fn().mockImplementation((input) => {
+          loadedInput = input
+          return Promise.resolve({
+            bytes: input instanceof Uint8Array ? input : new Uint8Array(),
+            format: 'html',
+          })
+        }),
+      })
+      registry.register(plugin)
+
+      await processor.extract('https://example.com/page.html')
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://example.com/page.html',
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'User-Agent': 'letmesense/1.0' }),
+        }),
+      )
+      // Plugin receives bytes (Uint8Array), not the URL string
+      expect(loadedInput).toBeInstanceOf(Uint8Array)
+    })
+
+    it('passes sourceUrl in options so plugin can preserve provenance', async () => {
+      mockFetch({ responseUrl: 'https://example.com/final-page.html' })
+
+      let loadOptions: Record<string, unknown> | undefined
+      const plugin = createMockPlugin({
+        id: 'html' as FormatId,
+        extensions: ['.html'],
+        mimeTypes: ['text/html'],
+        load: vi.fn().mockImplementation((_input, opts) => {
+          loadOptions = opts
+          return Promise.resolve({ bytes: htmlBytes, format: 'html' })
+        }),
+      })
+      registry.register(plugin)
+
+      await processor.extract('https://example.com/page.html')
+
+      expect(loadOptions?.sourceUrl).toBe('https://example.com/final-page.html')
+    })
+
+    it('does not set sourceUrl for file path inputs', async () => {
+      let loadOptions: Record<string, unknown> | undefined
+      const plugin = createMockPlugin({
+        load: vi.fn().mockImplementation((_input, opts) => {
+          loadOptions = opts
+          return Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), format: 'pdf' })
+        }),
+      })
+      registry.register(plugin)
+
+      await processor.extract('/test/file.mock')
+
+      expect(loadOptions?.sourceUrl).toBeUndefined()
+    })
+
+    it('throws on HTTP error response', async () => {
+      mockFetch({ ok: false, status: 404, statusText: 'Not Found' })
+
+      const plugin = createMockPlugin({
+        id: 'html' as FormatId,
+        extensions: ['.html'],
+        mimeTypes: ['text/html'],
+      })
+      registry.register(plugin)
+
+      await expect(processor.extract('https://example.com/missing.html')).rejects.toThrow(
+        'HTTP 404: Not Found',
+      )
+    })
+
+    it('skips URL resolution for buffer inputs', async () => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+      const plugin = createMockPlugin()
+      registry.register(plugin)
+
+      await processor.extract(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+        format: 'pdf' as FormatId,
+      })
+
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('uses finalUrl from response when redirect occurs', async () => {
+      mockFetch({ responseUrl: 'https://cdn.example.com/redirected.html' })
+
+      let loadOptions: Record<string, unknown> | undefined
+      const plugin = createMockPlugin({
+        id: 'html' as FormatId,
+        extensions: ['.html'],
+        mimeTypes: ['text/html'],
+        load: vi.fn().mockImplementation((_input, opts) => {
+          loadOptions = opts
+          return Promise.resolve({ bytes: htmlBytes, format: 'html' })
+        }),
+      })
+      registry.register(plugin)
+
+      await processor.extract('https://example.com/page.html')
+
+      expect(loadOptions?.sourceUrl).toBe('https://cdn.example.com/redirected.html')
     })
   })
 })

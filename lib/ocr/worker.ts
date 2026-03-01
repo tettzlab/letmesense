@@ -5,7 +5,7 @@
 import { createWorker, type Worker } from 'tesseract.js'
 
 import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { Metrics, Spans } from './signals.js'
 import { defaultTessdataDir, getOfflineWorkerOptions, shouldUseOffline } from './tessdata.js'
 
 /**
@@ -26,7 +26,7 @@ export interface CreateWorkerOptions {
 export async function createOcrWorker(options: CreateWorkerOptions): Promise<Worker> {
   const { tracer, metrics, logger } = obs('ocr.worker')
 
-  return tracer.startSpan(SpanNames.OCR_WORKER_CREATE, async (span) => {
+  return tracer.startSpan(Spans.WORKER_CREATE, async (span) => {
     span.setAttribute('lang', options.lang)
 
     const tessdataDir = options.tessdataDir ?? defaultTessdataDir()
@@ -41,7 +41,7 @@ export async function createOcrWorker(options: CreateWorkerOptions): Promise<Wor
     )
 
     metrics
-      .counter(SemanticMetrics.OCR_WORKERS_CREATED_COUNT)
+      .counter(Metrics.WORKER_CREATED_COUNT)
       .add(1, { lang: options.lang, offline: String(useOffline) })
     logger.debug({ lang: options.lang, useOffline }, 'OCR worker created')
 
@@ -57,7 +57,7 @@ export async function terminateWorker(worker: Worker): Promise<void> {
 
   try {
     await worker.terminate()
-    metrics.counter(SemanticMetrics.OCR_WORKERS_TERMINATED_COUNT).add(1)
+    metrics.counter(Metrics.WORKER_TERMINATED_COUNT).add(1)
   } catch {
     // Ignore termination errors
   }

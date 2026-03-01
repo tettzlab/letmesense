@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FormatPlugin } from './plugin.js'
 import {
   describeSource,

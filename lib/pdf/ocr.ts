@@ -1,7 +1,7 @@
 import { createCanvas } from '@napi-rs/canvas'
 import type { PageViewport } from 'pdfjs-dist'
 import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { SemanticAttributes } from '../observability/types.js'
 import {
   createOcrWorker,
   defaultTessdataDir,
@@ -16,6 +16,7 @@ import {
 } from './constants.js'
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjs.js'
 import { asPdfjsCanvasContext } from './pdfjsTypes.js'
+import { Metrics, Spans } from './signals.js'
 import type { ExtractionError } from './types.js'
 
 /**
@@ -42,13 +43,13 @@ export async function ocrPdfJsDocument(
 ): Promise<OcrResult> {
   const { tracer, metrics } = obs('pdf')
 
-  return tracer.startSpan(SpanNames.PDF_OCR, async (span) => {
+  return tracer.startSpan(Spans.OCR, async (span) => {
     const renderScale = options.renderScale ?? DEFAULT_OCR_RENDER_SCALE
     const tessdataDir = options.tessdataDir ?? defaultTessdataDir()
     const pageTimeout = options.pageTimeout ?? DEFAULT_PAGE_TIMEOUT_MS
 
     span.setAttribute('lang', options.lang)
-    span.setAttribute('pageCount', pdf.numPages)
+    span.setAttribute(SemanticAttributes.PAGE_COUNT, pdf.numPages)
 
     const useOffline = shouldUseOffline(tessdataDir, options.lang)
     span.setAttribute('useOffline', useOffline)
@@ -107,20 +108,20 @@ export async function ocrPdfJsDocument(
 
           const text = await withTimeout(processPage(), pageTimeout, `OCR page ${i + 1} timed out`)
           out.push(text)
-          metrics.counter(SemanticMetrics.PDF_OCR_PAGES_COUNT).add(1, { status: 'success' })
+          metrics.counter(Metrics.OCR_PAGE_COUNT).add(1, { status: 'success' })
         } catch (err) {
           // Graceful degradation: empty string for failed page, track error
           out.push('')
           errors.push({
-            pageIndex: i,
+            unitIndex: i,
             phase: 'ocr',
             message: err instanceof Error ? err.message : String(err),
           })
-          metrics.counter(SemanticMetrics.PDF_OCR_PAGES_COUNT).add(1, { status: 'failure' })
+          metrics.counter(Metrics.OCR_PAGE_COUNT).add(1, { status: 'failure' })
         }
       }
 
-      span.setAttribute('errorCount', errors.length)
+      span.setAttribute(SemanticAttributes.ERROR_COUNT, errors.length)
 
       return {
         text: out.join(DEFAULT_PAGE_SEPARATOR).trim(),

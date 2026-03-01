@@ -29,10 +29,13 @@ export interface VisionOptions {
 
   /** Disable adaptive scaling based on content type. When true, uses fixed maxImageDimension for all pages */
   disableAdaptiveScaling?: boolean
+
+  /** AbortSignal for cancellation */
+  signal?: AbortSignal
 }
 
 /** Default vision options */
-export const DEFAULT_VISION_OPTIONS: Required<VisionOptions> = {
+export const DEFAULT_VISION_OPTIONS: Required<Omit<VisionOptions, 'signal'>> = {
   enabled: false,
   model: 'openai:gpt-5-mini',
   parallel: 4,

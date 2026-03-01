@@ -1,15 +1,19 @@
-import tsconfigPaths from 'vite-tsconfig-paths'
-
 /**
  * Shared vitest settings used across all test configurations.
  * Centralizes common options to avoid duplication.
  */
 
-export const plugins = [tsconfigPaths()]
-
 export const baseTestConfig = {
   globals: true,
   pool: 'threads' as const,
+  clearMocks: true,
+  restoreMocks: true,
+  maxThreads: 4,
+  minThreads: 1,
+  env: {
+    LOG_LEVEL: 'silent',
+    MODELS_FILE: './models.json',
+  },
 }
 
 export const defaultExclude = ['**/node_modules/**', '**/.git/**']

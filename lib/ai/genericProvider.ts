@@ -6,12 +6,13 @@
  */
 
 import { generateText, streamText } from 'ai'
-import { obs, SemanticMetrics } from '../observability/index.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
 import { ProviderUnavailableError, parseApiError } from './errors.js'
 import { getModelPricing, getProviderConfig, modelSupportsPdf } from './models.js'
 import { buildPrompt, DEFAULT_TEXT_PROMPT, DEFAULT_VISION_PROMPT } from './prompts.js'
 import type { ProviderAdapter } from './providerAdapters.js'
 import { AbortRetryError, withRetry } from './retry.js'
+import { Metrics } from './signals.js'
 import { calculateMaxOutputTokens } from './tokens.js'
 import type {
   FormatRequest,
@@ -114,7 +115,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           } catch (error) {
             if (error instanceof ProviderUnavailableError) {
               metrics
-                .counter(SemanticMetrics.AI_REQUEST_COUNT)
+                .counter(Metrics.REQUEST_COUNT)
                 .add(1, { provider: providerId, status: 'unavailable' })
             }
             throw error
@@ -132,9 +133,9 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
         const model = config.model ?? this.defaultModel
         const vision = !!(request.image || (request.pdf && modelSupportsPdf(model)))
 
-        span.setAttribute('model', model)
+        span.setAttribute(SemanticAttributes.MODEL, model)
         span.setAttribute('vision', vision)
-        span.setAttribute('provider', providerId)
+        span.setAttribute(SemanticAttributes.PROVIDER, providerId)
         if (adapter.spanAttributes) {
           for (const [k, v] of Object.entries(adapter.spanAttributes(config))) {
             span.setAttribute(k, v)
@@ -157,7 +158,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
 
         if (!retryResult.success || !retryResult.result) {
           metrics
-            .counter(SemanticMetrics.AI_REQUEST_COUNT)
+            .counter(Metrics.REQUEST_COUNT)
             .add(1, { provider: providerId, model, status: 'error' })
           throw parseApiError(retryResult.error, providerLabel)
         }
@@ -195,27 +196,23 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           pricing,
         )
 
-        span.setAttribute('inputTokens', inputTokens)
-        span.setAttribute('outputTokens', outputTokens)
-        span.setAttribute('attempts', retryResult.attempts)
-        span.setAttribute('ai.cost.input.usd', inputCost)
-        span.setAttribute('ai.cost.output.usd', outputCost)
-        span.setAttribute('ai.cost.total.usd', totalCost)
+        span.setAttribute(SemanticAttributes.INPUT_TOKENS, inputTokens)
+        span.setAttribute(SemanticAttributes.OUTPUT_TOKENS, outputTokens)
+        span.setAttribute(SemanticAttributes.ATTEMPTS, retryResult.attempts)
+        span.setAttribute(SemanticAttributes.COST_INPUT_USD, inputCost)
+        span.setAttribute(SemanticAttributes.COST_OUTPUT_USD, outputCost)
+        span.setAttribute(SemanticAttributes.COST_TOTAL_USD, totalCost)
         metrics
-          .counter(SemanticMetrics.AI_REQUEST_COUNT)
+          .counter(Metrics.REQUEST_COUNT)
           .add(1, { provider: providerId, model, status: 'success' })
         metrics
-          .histogram(SemanticMetrics.AI_TOKEN_INPUT_COUNT)
+          .histogram(Metrics.TOKEN_INPUT_COUNT)
           .record(inputTokens, { provider: providerId, model })
         metrics
-          .histogram(SemanticMetrics.AI_TOKEN_OUTPUT_COUNT)
+          .histogram(Metrics.TOKEN_OUTPUT_COUNT)
           .record(outputTokens, { provider: providerId, model })
-        metrics
-          .histogram(SemanticMetrics.AI_COST_USD)
-          .record(totalCost, { provider: providerId, model })
-        metrics
-          .counter(SemanticMetrics.AI_COST_TOTAL_USD)
-          .add(totalCost, { provider: providerId, model })
+        metrics.histogram(Metrics.COST_USD).record(totalCost, { provider: providerId, model })
+        metrics.counter(Metrics.COST_TOTAL_USD).add(totalCost, { provider: providerId, model })
         logger.debug(
           {
             model,
@@ -257,7 +254,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           } catch (error) {
             if (error instanceof ProviderUnavailableError) {
               metrics
-                .counter(SemanticMetrics.AI_REQUEST_COUNT)
+                .counter(Metrics.REQUEST_COUNT)
                 .add(1, { provider: providerId, status: 'unavailable', streaming: 'true' })
             }
             throw error
@@ -275,10 +272,10 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
         const model = config.model ?? this.defaultModel
         const vision = !!(request.image || (request.pdf && modelSupportsPdf(model)))
 
-        span.setAttribute('model', model)
+        span.setAttribute(SemanticAttributes.MODEL, model)
         span.setAttribute('vision', vision)
-        span.setAttribute('provider', providerId)
-        span.setAttribute('streaming', true)
+        span.setAttribute(SemanticAttributes.PROVIDER, providerId)
+        span.setAttribute(SemanticAttributes.STREAMING, true)
         if (adapter.spanAttributes) {
           for (const [k, v] of Object.entries(adapter.spanAttributes(config))) {
             span.setAttribute(k, v)
@@ -350,7 +347,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
 
         if (!retryResult.success || !retryResult.result) {
           metrics
-            .counter(SemanticMetrics.AI_REQUEST_COUNT)
+            .counter(Metrics.REQUEST_COUNT)
             .add(1, { provider: providerId, model, status: 'error', streaming: 'true' })
           throw parseApiError(retryResult.error, providerLabel)
         }
@@ -380,27 +377,23 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           pricing,
         )
 
-        span.setAttribute('inputTokens', inputTokens)
-        span.setAttribute('outputTokens', outputTokens)
-        span.setAttribute('attempts', retryResult.attempts)
-        span.setAttribute('ai.cost.input.usd', inputCost)
-        span.setAttribute('ai.cost.output.usd', outputCost)
-        span.setAttribute('ai.cost.total.usd', totalCost)
+        span.setAttribute(SemanticAttributes.INPUT_TOKENS, inputTokens)
+        span.setAttribute(SemanticAttributes.OUTPUT_TOKENS, outputTokens)
+        span.setAttribute(SemanticAttributes.ATTEMPTS, retryResult.attempts)
+        span.setAttribute(SemanticAttributes.COST_INPUT_USD, inputCost)
+        span.setAttribute(SemanticAttributes.COST_OUTPUT_USD, outputCost)
+        span.setAttribute(SemanticAttributes.COST_TOTAL_USD, totalCost)
         metrics
-          .counter(SemanticMetrics.AI_REQUEST_COUNT)
+          .counter(Metrics.REQUEST_COUNT)
           .add(1, { provider: providerId, model, status: 'success', streaming: 'true' })
         metrics
-          .histogram(SemanticMetrics.AI_TOKEN_INPUT_COUNT)
+          .histogram(Metrics.TOKEN_INPUT_COUNT)
           .record(inputTokens, { provider: providerId, model })
         metrics
-          .histogram(SemanticMetrics.AI_TOKEN_OUTPUT_COUNT)
+          .histogram(Metrics.TOKEN_OUTPUT_COUNT)
           .record(outputTokens, { provider: providerId, model })
-        metrics
-          .histogram(SemanticMetrics.AI_COST_USD)
-          .record(totalCost, { provider: providerId, model })
-        metrics
-          .counter(SemanticMetrics.AI_COST_TOTAL_USD)
-          .add(totalCost, { provider: providerId, model })
+        metrics.histogram(Metrics.COST_USD).record(totalCost, { provider: providerId, model })
+        metrics.counter(Metrics.COST_TOTAL_USD).add(totalCost, { provider: providerId, model })
         logger.debug(
           { model, inputTokens, outputTokens, streaming: true, costUsd: totalCost },
           `${providerLabel} stream completed`,

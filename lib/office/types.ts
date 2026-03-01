@@ -7,21 +7,16 @@
 import type { Lang } from '../common/types.js'
 export type { Lang }
 
+// Use canonical ContentKind from pipeline
+import type { ContentKind } from '../pipeline/types.js'
+export type { ContentKind }
+
 // ============================================================================
 // Core Types
 // ============================================================================
 
 /** Supported Office document formats */
 export type OfficeFormat = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
-
-/** Content classification for Office content units */
-export type ContentKind =
-  | 'text-rich' // Primarily text content
-  | 'image-heavy' // Dominated by images
-  | 'mixed' // Significant text and images
-  | 'table' // Contains tables/charts requiring higher resolution
-  | 'empty' // No meaningful content
-  | 'unknown' // Analysis failed
 
 // ============================================================================
 // Error Types
@@ -135,7 +130,7 @@ export interface SectionAttributes extends ContentAttributes {
  * Analogous to SplitRun in letmesense.
  */
 export interface ContentRun {
-  /** Unique key: "text-rich|eng" */
+  /** Unique key: "text-only|eng" */
   key: string
 
   /** Shared attributes for this run */
@@ -151,8 +146,8 @@ export interface ContentRun {
 
 /** Options for content analysis */
 export interface AnalyzeOptions {
-  /** Minimum chars to consider content as having text (default: 20) */
-  minCharsForTextRich?: number
+  /** Minimum chars to consider content as text-only (default: 20) */
+  minCharsForTextOnly?: number
 
   /** Minimum chars for language detection (default: 50) */
   minCharsForLangDetect?: number
@@ -179,10 +174,10 @@ export interface ExtractOptions {
   includeNotes?: boolean
 
   /** For PPTX: specific slide range (e.g., "1-5,7,9-12") */
-  slideRange?: string
+  slides?: string
 
   /** For XLSX: specific sheet names (comma-separated) */
-  sheetNames?: string
+  sheets?: string
 
   /** For XLSX: treat first row as headers */
   headers?: boolean

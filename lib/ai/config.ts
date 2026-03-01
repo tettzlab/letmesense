@@ -1,20 +1,23 @@
 import {
+  getModelRegistry,
   getModelsByProvider,
-  MODEL_REGISTRY,
+  getProviderRegistry,
   type ModelPricing,
-  PROVIDER_REGISTRY,
   type ProviderId,
   resolveModelAlias,
 } from './models.js'
 
-// Derive PROVIDERS from PROVIDER_REGISTRY (single source of truth)
-export const PROVIDERS = PROVIDER_REGISTRY.map((p) => ({ id: p.id, name: p.name }))
+// Derive PROVIDERS from registry (lazy)
+export function getProviders(): { id: ProviderId; name: string }[] {
+  return getProviderRegistry().map((p) => ({ id: p.id, name: p.name }))
+}
 
 // Re-export model types for convenience
 export type {
   ModelCapabilities,
   ModelConfig,
   ModelPricing,
+  ModelRegistryInit,
   ProviderConfig,
   ProviderId,
   ReasoningConfig,
@@ -22,15 +25,18 @@ export type {
   TokenizerEncoding,
 } from './models.js'
 export {
+  _resetRegistryCache,
+  getDefaultProvider,
   getModel,
   getModelOrThrow,
   getModelPricing,
+  getModelRegistry,
   getModelsByProvider,
   getProviderConfig,
-  MODEL_REGISTRY,
+  getProviderRegistry,
+  initModelRegistry,
   modelSupportsPdf,
   modelSupportsVision,
-  PROVIDER_REGISTRY,
 } from './models.js'
 // Re-export provider options
 export { buildProviderOptions } from './providerOptions.js'
@@ -194,34 +200,41 @@ export interface DetectedProvider {
   reason: string
 }
 
-// Derive MODELS from MODEL_REGISTRY for backward compatibility
-export const MODELS: Record<ProviderId, readonly { readonly id: string; readonly name: string }[]> =
-  {
+// Derive MODELS from registry (lazy)
+export function getModels(): Record<
+  ProviderId,
+  readonly { readonly id: string; readonly name: string }[]
+> {
+  return {
     openai: getModelsByProvider('openai').map((m) => ({ id: m.id, name: m.name })),
     anthropic: getModelsByProvider('anthropic').map((m) => ({ id: m.id, name: m.name })),
     google: getModelsByProvider('google').map((m) => ({ id: m.id, name: m.name })),
     ollama: getModelsByProvider('ollama').map((m) => ({ id: m.id, name: m.name })),
-  } as const
-
-export { DEFAULT_PROVIDER } from './models.js'
-
-// Free tier models derived from MODEL_REGISTRY
-export const FREE_TIER_MODELS: readonly string[] = MODEL_REGISTRY.filter((m) => m.freeTier).map(
-  (m) => m.id,
-)
-
-export function isFreeTierModel(modelId: string): boolean {
-  return FREE_TIER_MODELS.includes(modelId)
+  }
 }
 
-// Free tier models organized by provider (derived from registry)
-export const FREE_TIER_MODELS_BY_PROVIDER: Readonly<
+// Free tier models derived from registry (lazy)
+export function getFreeTierModels(): readonly string[] {
+  return getModelRegistry()
+    .filter((m) => m.freeTier)
+    .map((m) => m.id)
+}
+
+export function isFreeTierModel(modelId: string): boolean {
+  return getFreeTierModels().includes(modelId)
+}
+
+// Free tier models organized by provider (lazy)
+export function getFreeTierModelsByProvider(): Readonly<
   Record<ProviderId, readonly { readonly id: string; readonly name: string }[]>
-> = {
-  openai: MODELS.openai.filter((m) => isFreeTierModel(m.id)),
-  anthropic: MODELS.anthropic.filter((m) => isFreeTierModel(m.id)),
-  google: MODELS.google.filter((m) => isFreeTierModel(m.id)),
-  ollama: MODELS.ollama.filter((m) => isFreeTierModel(m.id)),
+> {
+  const models = getModels()
+  return {
+    openai: models.openai.filter((m) => isFreeTierModel(m.id)),
+    anthropic: models.anthropic.filter((m) => isFreeTierModel(m.id)),
+    google: models.google.filter((m) => isFreeTierModel(m.id)),
+    ollama: models.ollama.filter((m) => isFreeTierModel(m.id)),
+  }
 }
 
 // Response token limits
@@ -240,33 +253,43 @@ export interface FlatModel {
   isFreeTier: boolean // whether this model is available to guests
 }
 
-export const FLAT_MODELS: FlatModel[] = PROVIDERS.flatMap((provider) =>
-  MODELS[provider.id].map((model) => ({
-    id: model.id,
-    name: model.name,
-    provider: provider.id,
-    providerName: provider.name,
-    isFreeTier: isFreeTierModel(model.id),
-  })),
-)
-
-// Helper for CLI help text
-export const providerChoices = PROVIDERS.map((p) => p.id).join(' | ')
-
-// Derive MODEL_ALIASES from MODEL_REGISTRY for backward compatibility
-function buildAliasMap(provider: ProviderId): Record<string, string> {
-  return Object.fromEntries(
-    MODEL_REGISTRY.filter((m) => m.provider === provider).flatMap((m) =>
-      (m.aliases ?? []).map((alias) => [alias, m.id]),
-    ),
+export function getFlatModels(): FlatModel[] {
+  const providers = getProviders()
+  const models = getModels()
+  return providers.flatMap((provider) =>
+    models[provider.id].map((model) => ({
+      id: model.id,
+      name: model.name,
+      provider: provider.id,
+      providerName: provider.name,
+      isFreeTier: isFreeTierModel(model.id),
+    })),
   )
 }
 
-export const MODEL_ALIASES: Record<ProviderId, Record<string, string>> = {
-  openai: buildAliasMap('openai'),
-  anthropic: buildAliasMap('anthropic'),
-  google: buildAliasMap('google'),
-  ollama: buildAliasMap('ollama'),
+// Helper for CLI help text
+export function getProviderChoices(): string {
+  return getProviders()
+    .map((p) => p.id)
+    .join(' | ')
+}
+
+// Derive MODEL_ALIASES from registry (lazy)
+function buildAliasMap(provider: ProviderId): Record<string, string> {
+  return Object.fromEntries(
+    getModelRegistry()
+      .filter((m) => m.provider === provider)
+      .flatMap((m) => (m.aliases ?? []).map((alias) => [alias, m.id])),
+  )
+}
+
+export function getModelAliases(): Record<ProviderId, Record<string, string>> {
+  return {
+    openai: buildAliasMap('openai'),
+    anthropic: buildAliasMap('anthropic'),
+    google: buildAliasMap('google'),
+    ollama: buildAliasMap('ollama'),
+  }
 }
 
 // Parsed model specification
@@ -308,10 +331,10 @@ export function parseModelSpec(spec: string): ParsedModelSpec {
   const [providerPart, modelPart, effortPart] = parts
 
   // Validate provider
-  const validProviders = PROVIDERS.map((p) => p.id) as readonly string[]
+  const validProviders = getProviders().map((p) => p.id) as readonly string[]
   if (!validProviders.includes(providerPart)) {
     throw new ParseModelSpecError(
-      `Unknown provider "${providerPart}". Valid providers: ${providerChoices}`,
+      `Unknown provider "${providerPart}". Valid providers: ${getProviderChoices()}`,
       'UNKNOWN_PROVIDER',
     )
   }
@@ -320,7 +343,7 @@ export function parseModelSpec(spec: string): ParsedModelSpec {
 
   // Check for empty model
   if (!modelPart) {
-    const example = MODELS[provider][0]?.id ?? '<model-id>'
+    const example = getModels()[provider][0]?.id ?? '<model-id>'
     throw new ParseModelSpecError(
       `Missing model ID after "${provider}:". Example: "${provider}:${example}"`,
       'MISSING_MODEL',
@@ -333,7 +356,7 @@ export function parseModelSpec(spec: string): ParsedModelSpec {
   // Validate effort if provided
   const effort: string | null = effortPart ?? null
   if (effort) {
-    const model = MODEL_REGISTRY.find((m) => m.id === resolvedModel)
+    const model = getModelRegistry().find((m) => m.id === resolvedModel)
     if (model && !model.capabilities?.reasoning) {
       throw new ParseModelSpecError(
         `Model "${resolvedModel}" does not support reasoning effort. Remove ":${effort}" from "${spec}".`,
@@ -353,9 +376,12 @@ export function parseModelSpec(spec: string): ParsedModelSpec {
 
 // Generate example CLI commands for help text
 export function getModelSpecExamples(): string {
-  return PROVIDERS.map((p) => {
-    const models = MODELS[p.id as keyof typeof MODELS]
-    const firstModel = models[0]?.id ?? '<model-id>'
-    return `  --model ${p.id}:${firstModel}`
-  }).join('\n')
+  const models = getModels()
+  return getProviders()
+    .map((p) => {
+      const providerModels = models[p.id]
+      const firstModel = providerModels[0]?.id ?? '<model-id>'
+      return `  --model ${p.id}:${firstModel}`
+    })
+    .join('\n')
 }

@@ -1,6 +1,5 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
 
 import { officePlugin } from './plugin.js'
 import type { OfficeLoadedDocument, OfficeUnit } from './types.js'
@@ -103,7 +102,7 @@ describe('officePlugin', () => {
   })
 
   describe('classifyUnit', () => {
-    it('classifies text-rich unit', () => {
+    it('classifies text-only unit', () => {
       const unit: OfficeUnit = {
         index: 0,
         label: 'Section 1',
@@ -113,14 +112,14 @@ describe('officePlugin', () => {
         textSample: 'Lorem ipsum...',
         unitLabel: 'Section 1',
         imageCount: 0,
-        officeKind: 'text-rich',
+        officeKind: 'text-only',
       }
 
       const kind = officePlugin.classifyUnit(unit)
       expect(kind).toBe('text-only')
     })
 
-    it('classifies image-heavy unit', () => {
+    it('classifies image-only unit', () => {
       const unit: OfficeUnit = {
         index: 0,
         label: 'Slide 1',
@@ -130,7 +129,7 @@ describe('officePlugin', () => {
         textSample: '',
         unitLabel: 'Slide 1',
         imageCount: 5,
-        officeKind: 'image-heavy',
+        officeKind: 'image-only',
       }
 
       const kind = officePlugin.classifyUnit(unit)
@@ -183,7 +182,7 @@ describe('officePlugin', () => {
         textSample: 'Lorem ipsum...',
         unitLabel: 'Section 1',
         imageCount: 0,
-        officeKind: 'text-rich',
+        officeKind: 'text-only',
       }
 
       const key = officePlugin.buildRunKey?.(unit)

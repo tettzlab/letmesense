@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RawUsageInfo } from './providerAdapters.js'
 import {
   anthropicAdapter,
@@ -190,13 +189,8 @@ describe('googleAdapter', () => {
 
 describe('ollamaAdapter', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     delete process.env.OLLAMA_HOST
     mockFetch.mockResolvedValue({ ok: true })
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
   })
 
   describe('extractUsage', () => {

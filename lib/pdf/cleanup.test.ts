@@ -1,5 +1,4 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: Test file with mocks requires any casts
-import { afterEach, describe, expect, test, vi } from 'vitest'
 
 // Mock the pdfjs module before importing the functions that use it
 vi.mock('./pdfjs.js', () => ({
@@ -57,10 +56,6 @@ describe('timeout utility', () => {
 })
 
 describe('resource cleanup on errors', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   describe('extractFromHomogeneousPdf', () => {
     test('cleans up PDF document on processing error', async () => {
       const mockCleanup = vi.fn().mockResolvedValue(undefined)

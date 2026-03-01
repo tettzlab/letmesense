@@ -4,7 +4,6 @@
  */
 
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
 import { extractFromOffice, extractFromOfficeDetailed } from './extractAll.js'
 
 const FIXTURES = path.resolve('lib/office/fixtures')

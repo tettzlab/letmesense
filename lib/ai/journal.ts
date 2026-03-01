@@ -7,8 +7,11 @@
 import { randomBytes } from 'node:crypto'
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { obs } from '../observability/index.js'
 import type { CostBreakdown, ModelPricing, TokenUsage } from './config.js'
 import type { JournalCallback, JournalContext, JournalEntry } from './types.js'
+
+const { logger } = obs('ai.journal')
 
 /** Supported journal output formats */
 export type JournalFormat = 'jsonl' | 'markdown'
@@ -238,21 +241,25 @@ export async function createFileJournal(dir: string, experiment: string): Promis
   const filePath = join(dir, `${safeName}.jsonl`)
 
   return async (entry: JournalEntry): Promise<void> => {
-    // Save pending image data if present
-    const imageInfo = pendingImageData.get(entry)
-    if (imageInfo) {
-      entry.imagePath = await saveJournalImage(
-        dir,
-        experiment,
-        entry.id,
-        imageInfo.data,
-        imageInfo.mimeType,
-      )
-      pendingImageData.delete(entry)
-    }
+    try {
+      // Save pending image data if present
+      const imageInfo = pendingImageData.get(entry)
+      if (imageInfo) {
+        entry.imagePath = await saveJournalImage(
+          dir,
+          experiment,
+          entry.id,
+          imageInfo.data,
+          imageInfo.mimeType,
+        )
+        pendingImageData.delete(entry)
+      }
 
-    const line = `${JSON.stringify(entry)}\n`
-    await appendFile(filePath, line, 'utf-8')
+      const line = `${JSON.stringify(entry)}\n`
+      await appendFile(filePath, line, 'utf-8')
+    } catch (err) {
+      logger.warn({ err, filePath, entryId: entry.id }, 'Failed to write JSONL journal entry')
+    }
   }
 }
 
@@ -539,21 +546,25 @@ export async function createMarkdownJournal(
   }
 
   return async (entry: JournalEntry): Promise<void> => {
-    // Save pending image data if present
-    const imageInfo = pendingImageData.get(entry)
-    if (imageInfo) {
-      entry.imagePath = await saveJournalImage(
-        dir,
-        experiment,
-        entry.id,
-        imageInfo.data,
-        imageInfo.mimeType,
-      )
-      pendingImageData.delete(entry)
-    }
+    try {
+      // Save pending image data if present
+      const imageInfo = pendingImageData.get(entry)
+      if (imageInfo) {
+        entry.imagePath = await saveJournalImage(
+          dir,
+          experiment,
+          entry.id,
+          imageInfo.data,
+          imageInfo.mimeType,
+        )
+        pendingImageData.delete(entry)
+      }
 
-    const markdown = formatEntryAsMarkdown(entry)
-    await appendFile(filePath, markdown, 'utf-8')
+      const markdown = formatEntryAsMarkdown(entry)
+      await appendFile(filePath, markdown, 'utf-8')
+    } catch (err) {
+      logger.warn({ err, filePath, entryId: entry.id }, 'Failed to write markdown journal entry')
+    }
   }
 }
 

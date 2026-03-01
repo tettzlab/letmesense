@@ -24,6 +24,7 @@ import {
 } from '@opentelemetry/sdk-trace-base'
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions'
 import pino, { type Logger as PinoLogger } from 'pino'
+import { build as buildPrettyStream } from 'pino-pretty'
 import type {
   Counter,
   Gauge,
@@ -35,7 +36,6 @@ import type {
   ObservabilityFactory,
   Span,
   SpanAttributes,
-  SpanLink,
   Tracer,
 } from './types.js'
 import {
@@ -102,46 +102,6 @@ class OtelTracerAdapter implements Tracer {
         span.end()
       }
     })
-  }
-
-  async startSpanWithLinks<T>(
-    name: string,
-    links: SpanLink[],
-    fn: (span: Span) => Promise<T> | T,
-  ): Promise<T> {
-    // Convert our SpanLink to OTel format
-    const otelLinks = links.map((link) => ({
-      context: {
-        traceId: link.traceId,
-        spanId: link.spanId,
-        traceFlags: 1, // Sampled
-      },
-      attributes: link.attributes,
-    }))
-
-    return this.otelTracer.startActiveSpan(name, { links: otelLinks }, async (otelSpan) => {
-      const span = new OtelSpanAdapter(otelSpan)
-      try {
-        return await fn(span)
-      } catch (error) {
-        span.recordException(error instanceof Error ? error : new Error(String(error)))
-        span.setError(String(error))
-        throw error
-      } finally {
-        span.end()
-      }
-    })
-  }
-
-  getCurrentSpanContext(): SpanLink | undefined {
-    const activeSpan = trace.getActiveSpan()
-    if (!activeSpan) return undefined
-
-    const ctx = activeSpan.spanContext()
-    return {
-      traceId: ctx.traceId,
-      spanId: ctx.spanId,
-    }
   }
 }
 
@@ -323,6 +283,10 @@ const DEFAULT_REDACT_PATHS = [
   'private_key',
   'credential',
   'credentials',
+  // PII fields (email addresses)
+  'email',
+  'to',
+  'recipient',
   // Nested sensitive fields (wildcard)
   '*.password',
   '*.secret',
@@ -335,6 +299,10 @@ const DEFAULT_REDACT_PATHS = [
   '*.private_key',
   '*.credential',
   '*.credentials',
+  // Nested PII fields (wildcard)
+  '*.email',
+  '*.to',
+  '*.recipient',
   // HTTP headers
   'req.headers.authorization',
   'req.headers.cookie',
@@ -350,6 +318,7 @@ const DEFAULT_REDACT_PATHS = [
 export class PinoOtelObservabilityFactory implements ObservabilityFactory {
   private config: ObservabilityConfig
   private rootLogger: PinoLogger
+  private pinoTransport: pino.DestinationStream | null = null
   private sdk: NodeSDK | null = null
   private loggerProvider: LoggerProvider | null = null
   private initialized = false
@@ -384,8 +353,8 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
       })
     }
 
-    // Target 3: OTEL log bridge (when telemetry enabled and transport exists)
-    if (config.telemetryEnabled) {
+    // Target 3: OTEL log bridge (OTLP mode only - console mode logs go to stdout via Pino)
+    if (config.telemetryEnabled && !config.consoleExporter) {
       try {
         const transportPath = fileURLToPath(
           new URL('./transports/otel-log-transport.js', import.meta.url),
@@ -404,30 +373,33 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
       }
     }
 
+    // Create transport explicitly so we can close it in shutdown()
+    this.pinoTransport = pino.transport({ targets })
+
     // Create root Pino logger with all batteries
-    this.rootLogger = pino({
-      level: config.logLevel ?? (isDev ? 'debug' : 'info'),
+    this.rootLogger = pino(
+      {
+        level: config.logLevel ?? (isDev ? 'debug' : 'info'),
 
-      // Redaction - Pino's killer feature for security
-      redact: config.redact ?? DEFAULT_REDACT_PATHS,
+        // Redaction - Pino's killer feature for security
+        redact: config.redact ?? DEFAULT_REDACT_PATHS,
 
-      // Serializers for common objects
-      serializers: {
-        err: pino.stdSerializers.err,
-        error: pino.stdSerializers.err,
-        req: pino.stdSerializers.req,
-        res: pino.stdSerializers.res,
+        // Serializers for common objects
+        serializers: {
+          err: pino.stdSerializers.err,
+          error: pino.stdSerializers.err,
+          req: pino.stdSerializers.req,
+          res: pino.stdSerializers.res,
+        },
+
+        // Base bindings for all logs
+        base: {
+          service: config.service,
+          env: config.environment,
+        },
       },
-
-      // Base bindings for all logs
-      base: {
-        service: config.service,
-        env: config.environment,
-      },
-
-      // Multi-transport
-      transport: { targets },
-    })
+      this.pinoTransport,
+    )
 
     // Initialize tracer/metrics adapters (noop until init() is called)
     this.tracerAdapter = new NoopTracer()
@@ -444,16 +416,25 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
       return
     }
 
-    const isDev = this.config.environment === 'development'
+    // Console mode: output to stdout for quick debugging (--observe flag)
+    // OTLP mode: send to collector (OTEL_EXPORTER_OTLP_ENDPOINT env var)
+    const useConsole = this.config.consoleExporter === true
 
-    // Trace exporter: console for dev, OTLP for prod
-    const traceExporter = isDev ? new ConsoleSpanExporter() : new OTLPTraceExporter()
-    const spanProcessor = isDev
+    // Warn if OTLP mode enabled without endpoint configured
+    if (!useConsole && !process.env.OTEL_EXPORTER_OTLP_ENDPOINT) {
+      this.rootLogger.warn(
+        'OTLP mode enabled but OTEL_EXPORTER_OTLP_ENDPOINT not set, traces may be lost',
+      )
+    }
+
+    // Trace exporter: console for quick dev, OTLP for full observability
+    const traceExporter = useConsole ? new ConsoleSpanExporter() : new OTLPTraceExporter()
+    const spanProcessor = useConsole
       ? new SimpleSpanProcessor(traceExporter)
       : new BatchSpanProcessor(traceExporter as OTLPTraceExporter)
 
-    // Metrics exporter (prod only to reduce noise)
-    const metricReader = isDev
+    // Metrics exporter (OTLP only - no console equivalent)
+    const metricReader = useConsole
       ? undefined
       : new PeriodicExportingMetricReader({
           exporter: new OTLPMetricExporter(),
@@ -467,14 +448,15 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
       'deployment.environment': this.config.environment,
     })
 
-    // Setup LoggerProvider before SDK starts so logs are captured immediately
-    this.loggerProvider = new LoggerProvider({
-      resource,
-      processors: [new BatchLogRecordProcessor(new OTLPLogExporter())],
-    })
-
-    // Register globally so the Pino transport can access it
-    logs.setGlobalLoggerProvider(this.loggerProvider)
+    // Setup LoggerProvider for OTLP log export (skip in console mode - logs already go to stdout)
+    if (!useConsole) {
+      this.loggerProvider = new LoggerProvider({
+        resource,
+        processors: [new BatchLogRecordProcessor(new OTLPLogExporter())],
+      })
+      // Register globally so the Pino transport can access it
+      logs.setGlobalLoggerProvider(this.loggerProvider)
+    }
 
     this.sdk = new NodeSDK({
       resource,
@@ -500,7 +482,7 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
     // Note: Signal handlers (SIGTERM/SIGINT) should be registered by the CLI entry point,
     // not here. The CLI calls observabilityFactory.shutdown() in its handler.
 
-    this.rootLogger.info({ mode: isDev ? 'dev/console' : 'prod/OTLP' }, 'OpenTelemetry initialized')
+    this.rootLogger.info({ mode: useConsole ? 'console' : 'otlp' }, 'OpenTelemetry initialized')
   }
 
   async shutdown(): Promise<void> {
@@ -518,6 +500,13 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
         .catch((err) => this.rootLogger.error({ err }, 'OTEL SDK shutdown error'))
       this.sdk = null
     }
+
+    // Close Pino transport worker thread to allow process exit
+    if (this.pinoTransport && 'end' in this.pinoTransport) {
+      this.rootLogger.flush()
+      ;(this.pinoTransport as { end: () => void }).end()
+      this.pinoTransport = null
+    }
   }
 
   create(domain: string): Observability {
@@ -526,13 +515,6 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
       tracer: this.tracerAdapter,
       metrics: this.metricsAdapter,
     }
-  }
-
-  /**
-   * Get the root logger for advanced usage
-   */
-  getRootLogger(): PinoLogger {
-    return this.rootLogger
   }
 }
 
@@ -546,14 +528,15 @@ export class ConsoleObservabilityFactory implements ObservabilityFactory {
   private metrics: Metrics = new NoopMetrics()
 
   constructor(config: Pick<ObservabilityConfig, 'service' | 'logLevel'>) {
-    this.rootLogger = pino({
-      level: config.logLevel ?? 'info',
-      transport: {
-        target: 'pino-pretty',
-        options: { colorize: true, translateTime: 'HH:MM:ss' },
+    // Use synchronous pino-pretty stream (no worker thread) to allow clean process exit
+    const prettyStream = buildPrettyStream({ colorize: true, translateTime: 'HH:MM:ss' })
+    this.rootLogger = pino(
+      {
+        level: config.logLevel ?? 'info',
+        base: { service: config.service },
       },
-      base: { service: config.service },
-    })
+      prettyStream,
+    )
   }
 
   async init(): Promise<void> {
@@ -561,7 +544,7 @@ export class ConsoleObservabilityFactory implements ObservabilityFactory {
   }
 
   async shutdown(): Promise<void> {
-    // No-op for console-only
+    this.rootLogger.flush()
   }
 
   create(domain: string): Observability {

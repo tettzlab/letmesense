@@ -68,17 +68,19 @@ export async function streamTextWithRetry(
       // and are NOT retried - this is a documented limitation.
       return streamText(params)
     },
-    retryConfig,
-    (attempt, delay, error, category) => {
-      logger.warn(
-        {
-          attempt,
-          delay,
-          error: error.message,
-          category,
-        },
-        'Retrying streamText',
-      )
+    {
+      ...retryConfig,
+      onRetry(attempt, delay, error, category) {
+        logger.warn(
+          {
+            attempt,
+            delay,
+            error: error.message,
+            category,
+          },
+          'Retrying streamText',
+        )
+      },
     },
   )
 }
@@ -109,10 +111,9 @@ export async function generateTextWithRetry(
     initialDelayMs: options?.initialDelayMs ?? DEFAULT_RETRY_CONFIG.initialDelayMs,
   }
 
-  return withRetry(
-    () => generateText(params),
-    retryConfig,
-    (attempt, delay, error, category) => {
+  return withRetry(() => generateText(params), {
+    ...retryConfig,
+    onRetry(attempt, delay, error, category) {
       logger.warn(
         {
           attempt,
@@ -123,5 +124,5 @@ export async function generateTextWithRetry(
         'Retrying generateText',
       )
     },
-  )
+  })
 }

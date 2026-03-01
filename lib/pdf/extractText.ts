@@ -1,3 +1,4 @@
+import { throwIfAborted } from '../pipeline/errors.js'
 import { analyzePage } from './analyzePage.js'
 import {
   DEFAULT_MIXED_FALLBACK_CHARS,
@@ -10,7 +11,7 @@ import { ocrPdfJsDocument } from './ocr.js'
 import { loadPdfDocumentFromBytes } from './pdfjs.js'
 import { cleanupPdfDocument, getPageTextContent } from './pdfjsTypes.js'
 import { textItemsToString } from './text.js'
-import type { ExtractionError, ExtractionResult, ExtractTextOptions } from './types.js'
+import type { ExtractionError, ExtractTextOptions, PdfTextResult } from './types.js'
 
 /**
  * Extract text from a PDF that is assumed to be homogeneous (all pages same type).
@@ -22,13 +23,14 @@ import type { ExtractionError, ExtractionResult, ExtractTextOptions } from './ty
 export async function extractFromHomogeneousPdf(
   pdfBytes: Uint8Array,
   options: ExtractTextOptions = {},
-): Promise<ExtractionResult> {
+): Promise<PdfTextResult> {
   const {
     kind: forcedKind,
     ocrLang = 'eng',
     ocrRenderScale = DEFAULT_OCR_RENDER_SCALE,
     mixedFallbackToOcrIfUnderChars = DEFAULT_MIXED_FALLBACK_CHARS,
     pageTimeout = DEFAULT_PAGE_TIMEOUT_MS,
+    signal,
   } = options
 
   const pdf = await loadPdfDocumentFromBytes(pdfBytes)
@@ -54,6 +56,7 @@ export async function extractFromHomogeneousPdf(
     const errors: ExtractionError[] = []
 
     for (let i = 0; i < pdf.numPages; i++) {
+      throwIfAborted(signal, 'extract')
       try {
         const extractPage = async () => {
           const page = await pdf.getPage(i + 1)
@@ -71,7 +74,7 @@ export async function extractFromHomogeneousPdf(
         // Graceful degradation: empty string for failed page, track error
         byPage.push('')
         errors.push({
-          pageIndex: i,
+          unitIndex: i,
           phase: 'extract',
           message: err instanceof Error ? err.message : String(err),
         })

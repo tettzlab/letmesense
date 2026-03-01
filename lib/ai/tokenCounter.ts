@@ -1,7 +1,7 @@
 /**
  * Token Counter - Model-specific token counting using appropriate tokenizers.
  *
- * Uses the model's encoding from MODEL_REGISTRY to select the correct tokenizer.
+ * Uses the model's encoding from the model registry to select the correct tokenizer.
  * Tokenizers are lazy-loaded and cached for performance.
  */
 
@@ -71,7 +71,7 @@ export function countTokensWithEncoding(text: string, encoding: TokenizerEncodin
 
 /**
  * Count tokens for a specific model.
- * Looks up the model's encoding from MODEL_REGISTRY.
+ * Looks up the model's encoding from the model registry.
  */
 export function countTokens(text: string, modelId: string): number {
   const model = getModel(modelId)

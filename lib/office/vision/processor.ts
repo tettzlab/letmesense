@@ -16,9 +16,10 @@ import { calculateEntryCost, createJournalEntry } from '../../ai/journal.js'
 import { modelSupportsPdf } from '../../ai/models.js'
 import { DEFAULT_VISION_PROMPT } from '../../ai/prompts.js'
 import { resolveProvider } from '../../ai/provider.js'
-import type { JournalCallback, OfficeUnitContext } from '../../ai/types.js'
-import { obs } from '../../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../../observability/types.js'
+import type { JournalCallback } from '../../ai/types.js'
+import { obs, SemanticAttributes } from '../../observability/index.js'
+import type { OfficeUnitContext } from '../../pipeline/types.js'
+import { Metrics, Spans } from '../signals.js'
 import type { ContentKind, OfficeFormat } from '../types.js'
 import {
   ADAPTIVE_DIMENSIONS,
@@ -91,7 +92,7 @@ function createAttributes(
   index: number,
   label: string,
   text: string,
-  kind: ContentKind = 'text-rich',
+  kind: ContentKind = 'text-only',
 ): {
   unitIndex: number
   unitLabel: string
@@ -110,7 +111,7 @@ function createAttributes(
     imageCount: 0,
     textSample: text.slice(0, 400),
     language: 'eng',
-    hasTable: kind === 'table',
+    hasTable: kind === 'tabular',
   }
 }
 
@@ -146,7 +147,7 @@ export async function prepareVisionContent(
     // (PPTX slides = pages, XLSX sheets may span pages)
     const contents: VisionContent[] = extractedTexts.map((text, i) => {
       const label = getUnitLabel(format, i)
-      const kind = contentKinds?.[i] ?? 'text-rich'
+      const kind = contentKinds?.[i] ?? 'text-only'
       return {
         unitIndex: i,
         unitLabel: label,
@@ -170,7 +171,7 @@ export async function prepareVisionContent(
 
     const contents: VisionContent[] = extractedTexts.map((text, i) => {
       const label = getUnitLabel(format, i)
-      const kind = contentKinds?.[i] ?? 'text-rich'
+      const kind = contentKinds?.[i] ?? 'text-only'
       return {
         unitIndex: i,
         unitLabel: label,
@@ -358,16 +359,16 @@ export async function formatOfficeWithVision(
 ): Promise<VisionFormatResult> {
   const { tracer, metrics, logger } = obs('office.vision')
 
-  return tracer.startSpan(SpanNames.OFFICE_VISION_FORMAT, async (span) => {
+  return tracer.startSpan(Spans.VISION_FORMAT, async (span) => {
     const start = performance.now()
-    span.setAttribute('format', format)
-    span.setAttribute('unitCount', contents.length)
+    span.setAttribute(SemanticAttributes.FORMAT, format)
+    span.setAttribute(SemanticAttributes.UNIT_COUNT, contents.length)
 
     const provider = resolveProvider(options.llm)
     const visionModel = options.llm?.model ?? provider.defaultVisionModel
     const usePdfDirect = modelSupportsPdf(visionModel)
 
-    span.setAttribute('provider', provider.name)
+    span.setAttribute(SemanticAttributes.PROVIDER, provider.name)
     span.setAttribute('usePdfDirect', usePdfDirect)
 
     const config: LlmConfig = {
@@ -379,7 +380,7 @@ export async function formatOfficeWithVision(
       maxRetries: options.llm?.maxRetries ?? 3,
     }
 
-    span.setAttribute('model', config.model ?? 'default')
+    span.setAttribute(SemanticAttributes.MODEL, config.model ?? 'default')
 
     const results: VisionResult[] = []
     let totalInputTokens = 0
@@ -425,16 +426,12 @@ export async function formatOfficeWithVision(
     const content = results.map((r) => r.markdown).join('\n\n---\n\n')
 
     const durationMs = performance.now() - start
-    span.setAttribute('totalInputTokens', totalInputTokens)
-    span.setAttribute('totalOutputTokens', totalOutputTokens)
-    span.setAttribute('durationMs', Math.round(durationMs))
+    span.setAttribute(SemanticAttributes.TOTAL_INPUT_TOKENS, totalInputTokens)
+    span.setAttribute(SemanticAttributes.TOTAL_OUTPUT_TOKENS, totalOutputTokens)
+    span.setAttribute(SemanticAttributes.DURATION_MS, Math.round(durationMs))
 
-    metrics
-      .counter(SemanticMetrics.OFFICE_VISION_PROCESS_COUNT)
-      .add(1, { format, provider: provider.name })
-    metrics
-      .histogram(SemanticMetrics.OFFICE_VISION_PROCESS_DURATION_MS)
-      .record(durationMs, { format })
+    metrics.counter(Metrics.VISION_PROCESS_COUNT).add(1, { format, provider: provider.name })
+    metrics.histogram(Metrics.VISION_PROCESS_DURATION_MS).record(durationMs, { format })
     logger.debug(
       { format, unitCount: contents.length, totalInputTokens, totalOutputTokens, durationMs },
       'Vision formatting complete',

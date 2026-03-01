@@ -8,13 +8,39 @@ import { mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
+import { DEFAULT_PAGE_TIMEOUT_MS } from '../../common/timeouts.js'
 import { obs } from '../../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../../observability/types.js'
 import { OfficeConvertError } from '../errors.js'
+import { Metrics, Spans } from '../signals.js'
 import type { ConversionResult, ConvertOptions, LibreOfficeStatus } from './types.js'
 
-/** Default conversion timeout (60 seconds) */
-const DEFAULT_TIMEOUT = 60000
+/** Default conversion timeout */
+const DEFAULT_TIMEOUT = DEFAULT_PAGE_TIMEOUT_MS
+
+/**
+ * Patterns for harmless LibreOffice warnings that can appear in stderr
+ * without indicating an actual conversion failure.
+ */
+const HARMLESS_STDERR_PATTERNS = [/javaldx[^\n]*/g, /java may not function correctly[^\n]*/g]
+
+/** Returns true when all non-zero-exit stderr content is known-harmless. */
+function isHarmlessStderr(raw: string): boolean {
+  return cleanStderr(raw) === ''
+}
+
+/** Strip known harmless warnings from stderr to surface real errors. */
+function cleanStderr(raw: string): string {
+  let cleaned = raw
+  for (const pattern of HARMLESS_STDERR_PATTERNS) {
+    cleaned = cleaned.replace(pattern, '')
+  }
+  return cleaned.trim()
+}
+
+/** Build environment for LibreOffice subprocess — disables Java (not needed for headless conversion). */
+function libreOfficeEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, SAL_DISABLE_JAVA: '1' }
+}
 
 /** LibreOffice executable names to search for */
 const LIBREOFFICE_EXECUTABLES = [
@@ -102,7 +128,7 @@ export async function convertToPdf(
 ): Promise<ConversionResult> {
   const { tracer, metrics, logger } = obs('office.libreoffice')
 
-  return tracer.startSpan(SpanNames.OFFICE_LIBREOFFICE_CONVERT, async (span) => {
+  return tracer.startSpan(Spans.LIBREOFFICE_CONVERT, async (span) => {
     span.setAttribute('inputPath', inputPath)
 
     const startTime = Date.now()
@@ -147,6 +173,7 @@ export async function convertToPdf(
         ],
         {
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: libreOfficeEnv(),
         },
       )
 
@@ -168,14 +195,24 @@ export async function convertToPdf(
       proc.on('close', (code) => {
         clearTimeout(timer)
 
-        if (code === 0 && existsSync(outputPath)) {
+        // Check file existence as primary success indicator.
+        // LibreOffice may exit with non-zero code due to harmless warnings
+        // (e.g., "failed to launch javaldx") while still producing valid output.
+        // However, non-zero exit with real stderr errors likely means a partial/corrupt file.
+        const stderrIsHarmless = code !== 0 ? isHarmlessStderr(stderr) : true
+
+        if (existsSync(outputPath) && (code === 0 || stderrIsHarmless)) {
+          if (code !== 0) {
+            logger.debug(
+              { inputPath, code, stderr: stderr.trim() },
+              'LibreOffice exited with warnings but output file exists',
+            )
+          }
           const duration = Date.now() - startTime
           span.setAttribute('duration', duration)
           span.setAttribute('outputPath', outputPath)
-          metrics
-            .counter(SemanticMetrics.OFFICE_LIBREOFFICE_CONVERSIONS_COUNT)
-            .add(1, { status: 'success' })
-          metrics.histogram(SemanticMetrics.OFFICE_LIBREOFFICE_DURATION_MS).record(duration)
+          metrics.counter(Metrics.LIBREOFFICE_CONVERSION_COUNT).add(1, { status: 'success' })
+          metrics.histogram(Metrics.LIBREOFFICE_DURATION_MS).record(duration)
           logger.debug({ inputPath, outputPath, duration }, 'LibreOffice conversion completed')
 
           resolve({
@@ -184,19 +221,20 @@ export async function convertToPdf(
             duration,
           })
         } else {
-          const errorMsg = stderr || stdout || `Exit code ${code}`
-          metrics
-            .counter(SemanticMetrics.OFFICE_LIBREOFFICE_CONVERSIONS_COUNT)
-            .add(1, { status: 'error' })
+          // Remove potentially corrupt partial output
+          if (existsSync(outputPath)) {
+            rm(outputPath, { force: true }).catch(() => {})
+          }
+          const cleaned = cleanStderr(stderr)
+          const errorMsg = cleaned || stdout.trim() || `Exit code ${code}`
+          metrics.counter(Metrics.LIBREOFFICE_CONVERSION_COUNT).add(1, { status: 'error' })
           reject(new OfficeConvertError(`LibreOffice conversion failed: ${errorMsg}`))
         }
       })
 
       proc.on('error', (err) => {
         clearTimeout(timer)
-        metrics
-          .counter(SemanticMetrics.OFFICE_LIBREOFFICE_CONVERSIONS_COUNT)
-          .add(1, { status: 'error' })
+        metrics.counter(Metrics.LIBREOFFICE_CONVERSION_COUNT).add(1, { status: 'error' })
         reject(new OfficeConvertError(`Failed to spawn LibreOffice: ${err.message}`))
       })
     })
@@ -218,7 +256,7 @@ export async function convertWithProfile(
 ): Promise<ConversionResult> {
   const { tracer, metrics, logger } = obs('office.libreoffice')
 
-  return tracer.startSpan(SpanNames.OFFICE_LIBREOFFICE_CONVERT_WITH_PROFILE, async (span) => {
+  return tracer.startSpan(Spans.LIBREOFFICE_CONVERT_WITH_PROFILE, async (span) => {
     span.setAttribute('inputPath', inputPath)
     span.setAttribute('profileDir', profileDir)
 
@@ -260,6 +298,7 @@ export async function convertWithProfile(
         ],
         {
           stdio: ['ignore', 'pipe', 'pipe'],
+          env: libreOfficeEnv(),
         },
       )
 
@@ -286,14 +325,22 @@ export async function convertWithProfile(
           }
         }
 
-        if (code === 0 && existsSync(outputPath)) {
+        const stderrIsHarmless = code !== 0 ? isHarmlessStderr(stderr) : true
+
+        if (existsSync(outputPath) && (code === 0 || stderrIsHarmless)) {
+          if (code !== 0) {
+            logger.debug(
+              { inputPath, code, stderr: stderr.trim() },
+              'LibreOffice exited with warnings but output file exists',
+            )
+          }
           const duration = Date.now() - startTime
           span.setAttribute('duration', duration)
           span.setAttribute('outputPath', outputPath)
           metrics
-            .counter(SemanticMetrics.OFFICE_LIBREOFFICE_CONVERSIONS_PROFILE_COUNT)
+            .counter(Metrics.LIBREOFFICE_CONVERSION_PROFILE_COUNT)
             .add(1, { status: 'success' })
-          metrics.histogram(SemanticMetrics.OFFICE_LIBREOFFICE_DURATION_MS).record(duration)
+          metrics.histogram(Metrics.LIBREOFFICE_DURATION_MS).record(duration)
           logger.debug(
             { inputPath, outputPath, duration },
             'LibreOffice profile conversion completed',
@@ -305,22 +352,20 @@ export async function convertWithProfile(
             duration,
           })
         } else {
-          metrics
-            .counter(SemanticMetrics.OFFICE_LIBREOFFICE_CONVERSIONS_PROFILE_COUNT)
-            .add(1, { status: 'error' })
-          reject(
-            new OfficeConvertError(
-              `LibreOffice conversion failed: ${stderr || `Exit code ${code}`}`,
-            ),
-          )
+          // Remove potentially corrupt partial output
+          if (existsSync(outputPath)) {
+            rm(outputPath, { force: true }).catch(() => {})
+          }
+          const cleaned = cleanStderr(stderr)
+          const errorMsg = cleaned || `Exit code ${code}`
+          metrics.counter(Metrics.LIBREOFFICE_CONVERSION_PROFILE_COUNT).add(1, { status: 'error' })
+          reject(new OfficeConvertError(`LibreOffice conversion failed: ${errorMsg}`))
         }
       })
 
       proc.on('error', (err) => {
         clearTimeout(timer)
-        metrics
-          .counter(SemanticMetrics.OFFICE_LIBREOFFICE_CONVERSIONS_PROFILE_COUNT)
-          .add(1, { status: 'error' })
+        metrics.counter(Metrics.LIBREOFFICE_CONVERSION_PROFILE_COUNT).add(1, { status: 'error' })
         reject(new OfficeConvertError(`Failed to spawn LibreOffice: ${err.message}`))
       })
     })

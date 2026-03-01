@@ -2,7 +2,7 @@
 /**
  * Unified CLI for document text extraction.
  *
- * Supports: PDF, DOCX, PPTX, XLSX, ODT, ODP, ODS, PNG, JPG, GIF, WebP, SVG
+ * Supports: PDF, DOCX, PPTX, XLSX, ODT, ODP, ODS, PNG, JPG, GIF, WebP, SVG, HTML
  *
  * Uses the unified pipeline (PipelineProcessor) for extraction,
  * with optional LLM-enhanced formatting.
@@ -28,9 +28,14 @@ import { fileURLToPath } from 'node:url'
 import { program } from 'commander'
 import pino from 'pino'
 import { parseModelSpec } from '../lib/ai/config.js'
+import { initModelRegistry } from '../lib/ai/models.js'
 import type { Observability, ObservabilityFactory, Span } from '../lib/observability/index.js'
-import { createObservability, setObservabilityFactory } from '../lib/observability/index.js'
-import { SemanticMetrics } from '../lib/observability/types.js'
+import {
+  createObservability,
+  SemanticAttributes,
+  setObservabilityFactory,
+} from '../lib/observability/index.js'
+import { Metrics, Spans } from './signals.js'
 
 // ============================================================================
 // Observability - Set up BEFORE importing any modules that use obs()
@@ -119,6 +124,7 @@ async function shutdownObs(): Promise<void> {
 // ============================================================================
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const BUNDLED_MODELS_PATH = new URL('../models.json', import.meta.url).pathname
 
 let VERSION = '0.0.0'
 try {
@@ -152,6 +158,7 @@ async function getRegistry() {
   await import('../lib/formats/pdf/index.js')
   await import('../lib/formats/office/index.js')
   await import('../lib/formats/image/index.js')
+  await import('../lib/formats/web/index.js')
   const { getDefaultRegistry } = await import('../lib/pipeline/registry.js')
   return getDefaultRegistry()
 }
@@ -254,10 +261,8 @@ async function exitWithCode(
   const status =
     code === EXIT_SUCCESS ? 'success' : code === EXIT_INPUT_ERROR ? 'input_error' : 'error'
 
-  metrics
-    .counter(SemanticMetrics.CLI_COMMANDS_COUNT)
-    .add(1, { mode, status, ...(format && { format }) })
-  metrics.histogram(SemanticMetrics.CLI_DURATION_MS).record(durationMs, { mode, status })
+  metrics.counter(Metrics.COMMAND_COUNT).add(1, { mode, status, ...(format && { format }) })
+  metrics.histogram(Metrics.DURATION_MS).record(durationMs, { mode, status })
 
   await shutdownObs()
   process.exit(code)
@@ -371,6 +376,10 @@ interface CliOptions {
   includeData: boolean
   dataUri: boolean
 
+  // HTML/Web-specific
+  links: boolean
+  images: boolean
+
   // LLM options
   llm: boolean
   vision: boolean
@@ -384,6 +393,10 @@ interface CliOptions {
   journalTag?: string
   journalDir: string
   journalFormat: 'jsonl' | 'markdown'
+
+  // Model registry
+  modelsFile?: string
+  modelsJson?: string
 }
 
 // ============================================================================
@@ -392,7 +405,7 @@ interface CliOptions {
 
 program
   .name('letmesense')
-  .description('Extract text from documents (PDF, Office, Images)')
+  .description('Extract text from documents (PDF, Office, Images, HTML)')
   .version(VERSION)
   .argument('<input>', 'File path, URL, or - for stdin')
 
@@ -429,6 +442,10 @@ program
   .option('--include-data', 'Include base64 data in JSON', false)
   .option('--data-uri', 'Output as data URI', false)
 
+  // HTML/Web options
+  .option('--no-links', 'Strip links from HTML output (keep text)')
+  .option('--no-images', 'Strip images from HTML output')
+
   // LLM options
   .option('--llm', 'Enable LLM-enhanced markdown formatting', false)
   .option('--vision', 'Enable vision mode (renders to images, sends to LLM)', false)
@@ -448,6 +465,8 @@ program
   .option('--journal-dir <path>', 'Journal directory', './experiments')
   .option('--journal-format <fmt>', 'Journal format: jsonl or markdown', 'markdown')
   .option('--dotenv', 'Load environment variables from .env file', false)
+  .option('--models-file <path>', 'Path to models.json file (default: bundled)')
+  .option('--models-json <json>', 'Raw JSON string for model registry (overrides --models-file)')
 
   .addHelpText(
     'after',
@@ -483,11 +502,21 @@ Provider Configuration (set one to enable auto-detection):
     const { logger, tracer, metrics } = getObs()
     const startTime = performance.now()
 
+    // Configure model registry before first access.
+    // CLI flags take priority; env vars are checked inside loadModelsJson() as fallback.
+    if (opts.modelsJson) {
+      initModelRegistry({ json: opts.modelsJson })
+    } else if (opts.modelsFile) {
+      initModelRegistry({ file: opts.modelsFile })
+    } else if (!process.env.MODELS_JSON && !process.env.MODELS_FILE) {
+      initModelRegistry({ file: BUNDLED_MODELS_PATH })
+    }
+
     // Determine mode for metrics
     const mode = opts.vision ? 'vision' : opts.llm ? 'llm' : 'extract'
 
     try {
-      await tracer.startSpan('cli.command', async (span) => {
+      await tracer.startSpan(Spans.COMMAND, async (span) => {
         span.setAttribute('mode', mode)
         span.setAttribute('input', input === '-' ? 'stdin' : input)
 
@@ -515,8 +544,8 @@ Provider Configuration (set one to enable auto-detection):
           await validateOutputPath(outputPath)
         }
 
-        // Get the registry and processor
-        const registry = await getRegistry()
+        // Ensure plugins registered, get processor
+        await getRegistry()
         const processor = await getProcessor()
 
         // Handle stdin
@@ -538,31 +567,11 @@ Provider Configuration (set one to enable auto-detection):
           inputData = new Uint8Array(stdinBuffer)
         }
 
-        // Detect format
-        const detected = registry.detectFormat(inputData, {
-          format: opts.inputFormat as import('../lib/pipeline/types.js').FormatId | undefined,
-        })
-        if (!detected) {
-          console.error('Error: Unable to detect format. Use --input-format to specify.')
-          await exitWithCode(EXIT_INPUT_ERROR, metrics, mode, startTime)
-          return
-        }
-
-        const { format } = detected
-        span.setAttribute('format', format)
-        log(`Format: ${format}`, opts.quiet)
-        logger.info({ input, format, mode }, 'CLI command started')
+        logger.info({ input, mode }, 'CLI command started')
 
         // Handle vision mode
         if (opts.vision) {
-          if (format === 'image') {
-            // Images go directly to vision LLM
-            await handleImageAnalysis(input, opts)
-          } else {
-            // Documents are rendered to images first
-            await handleVisionMode(input, opts)
-          }
-          await exitWithCode(EXIT_SUCCESS, metrics, 'vision', startTime, format)
+          await handleVisionMode(inputData, opts, metrics, startTime)
           return
         }
 
@@ -578,12 +587,15 @@ Provider Configuration (set one to enable auto-detection):
           ocrLanguage: opts.ocrLang,
           // Office options
           includeNotes: opts.includeNotes,
-          slideRange: opts.slides,
-          sheetNames: opts.sheets,
+          slides: opts.slides,
+          sheets: opts.sheets,
           headers: opts.headers,
           // Image options
           maxDimension: opts.maxDimension,
           quality: opts.quality,
+          // HTML/Web options
+          includeLinks: opts.links,
+          includeImages: opts.images,
         }
 
         // Use extractUnits for LLM mode to get per-unit text
@@ -598,9 +610,11 @@ Provider Configuration (set one to enable auto-detection):
           result = await processor.extract(inputData, extractOptions)
         }
 
-        span.setAttribute('unitCount', result.unitCount)
-        span.setAttribute('runCount', result.runCount)
-        span.setAttribute('errorCount', result.errors.length)
+        span.setAttribute(SemanticAttributes.FORMAT, result.format)
+        span.setAttribute(SemanticAttributes.UNIT_COUNT, result.unitCount)
+        span.setAttribute(SemanticAttributes.RUN_COUNT, result.runCount)
+        span.setAttribute(SemanticAttributes.ERROR_COUNT, result.errors.length)
+        log(`Format: ${result.format}`, opts.quiet)
 
         // Handle LLM formatting with individual units
         let finalText = result.text
@@ -620,7 +634,7 @@ Provider Configuration (set one to enable auto-detection):
             {
               text: result.text,
               source: result.source,
-              format: format,
+              format: result.format,
               unitCount: result.unitCount,
               runCount: result.runCount,
               errors: result.errors,
@@ -653,19 +667,21 @@ Provider Configuration (set one to enable auto-detection):
         }
 
         const durationMs = Math.round(performance.now() - startTime)
-        span.setAttribute('durationMs', durationMs)
+        span.setAttribute(SemanticAttributes.DURATION_MS, durationMs)
         logger.info(
-          { format, mode, unitCount: result.unitCount, durationMs },
+          { format: result.format, mode, unitCount: result.unitCount, durationMs },
           'CLI command completed',
         )
 
-        await exitWithCode(EXIT_SUCCESS, metrics, mode, startTime, format)
+        await exitWithCode(EXIT_SUCCESS, metrics, mode, startTime, result.format)
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`Error: ${message}`)
       logger.error({ err, input, mode }, 'CLI command failed')
-      await exitWithCode(EXIT_PROCESSING_ERROR, metrics, mode, startTime)
+      const exitCode =
+        err instanceof Error && err.name === 'LoadError' ? EXIT_INPUT_ERROR : EXIT_PROCESSING_ERROR
+      await exitWithCode(exitCode, metrics, mode, startTime)
     }
   })
 
@@ -689,7 +705,7 @@ async function handleLlmFormatting(
   type PageInput = import('../lib/ai/format.js').PageInput
 
   // Register all providers
-  const { registerAllProviders } = await import('../lib/ai/providers.js')
+  const { registerAllProviders } = await import('../lib/ai/bootstrap.js')
   registerAllProviders()
 
   // Check provider availability
@@ -794,7 +810,12 @@ async function handleLlmFormatting(
 // Vision Mode Handler
 // ============================================================================
 
-async function handleVisionMode(input: string, opts: CliOptions): Promise<void> {
+async function handleVisionMode(
+  input: string | Uint8Array,
+  opts: CliOptions,
+  metrics: ReturnType<typeof getObs>['metrics'],
+  startTime: number,
+): Promise<void> {
   const { PipelineProcessor } = await import('../lib/pipeline/processor.js')
   const { parseModelSpec } = await import('../lib/ai/config.js')
   const { getProvider, detectProvider, resolveProvider } = await import('../lib/ai/provider.js')
@@ -802,7 +823,7 @@ async function handleVisionMode(input: string, opts: CliOptions): Promise<void> 
     await import('../lib/ai/journal.js')
 
   // Register all providers
-  const { registerAllProviders } = await import('../lib/ai/providers.js')
+  const { registerAllProviders } = await import('../lib/ai/bootstrap.js')
   registerAllProviders()
 
   // Resolve model: explicit --model or auto-detect from API keys
@@ -817,7 +838,8 @@ async function handleVisionMode(input: string, opts: CliOptions): Promise<void> 
           'Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.\n' +
           'Or specify a model with -m (e.g., -m openai:mini)',
       )
-      process.exit(EXIT_INPUT_ERROR)
+      await exitWithCode(EXIT_INPUT_ERROR, metrics, 'vision', startTime)
+      return
     }
     const provider = resolveProvider({ provider: detected.provider })
     visionModel = `${detected.provider}:${provider.defaultVisionModel}`
@@ -839,17 +861,19 @@ async function handleVisionMode(input: string, opts: CliOptions): Promise<void> 
       const confirmed = await confirmPrompt(costMessage)
       if (!confirmed) {
         console.error('Cancelled.')
-        process.exit(EXIT_SUCCESS)
+        await exitWithCode(EXIT_SUCCESS, metrics, 'vision', startTime)
+        return
       }
     }
   }
 
-  log(`Processing with vision: ${input}`, opts.quiet)
+  const inputLabel = typeof input === 'string' ? input : 'stdin'
+  log(`Processing with vision: ${inputLabel}`, opts.quiet)
   log(`Using model: ${visionModel}`, opts.quiet)
 
   // Create journal callback if journal is enabled
   let onJournal: import('../lib/ai/types.js').JournalCallback | undefined
-  const journalName = opts.journal ? generateJournalName(input, opts.journalTag) : undefined
+  const journalName = opts.journal ? generateJournalName(inputLabel, opts.journalTag) : undefined
   if (journalName) {
     if (opts.journalFormat === 'markdown') {
       onJournal = await createMarkdownJournal(opts.journalDir, journalName)
@@ -863,6 +887,7 @@ async function handleVisionMode(input: string, opts: CliOptions): Promise<void> 
   const processor = new PipelineProcessor()
   const outputPath = opts.output === '-' ? undefined : opts.output
   const streamingMode = shouldStream({ ...opts, output: outputPath })
+  let detectedFormat: import('../lib/pipeline/types.js').FormatId | undefined
 
   try {
     let fileStream: ReturnType<typeof createWriteStream> | undefined
@@ -886,14 +911,19 @@ async function handleVisionMode(input: string, opts: CliOptions): Promise<void> 
       strict: opts.strict,
       // Office options
       includeNotes: opts.includeNotes,
-      slideRange: opts.slides,
-      sheetNames: opts.sheets,
+      slides: opts.slides,
+      sheets: opts.sheets,
       headers: opts.headers,
       // Image options
       maxDimension: opts.maxDimension,
       quality: opts.quality,
     })) {
       switch (chunk.type) {
+        case 'metadata':
+          detectedFormat = chunk.format
+          log(`Format: ${chunk.format}`, opts.quiet)
+          break
+
         case 'unit-start':
           if (!opts.quiet) {
             console.error(`\nProcessing: ${chunk.label}`)
@@ -955,175 +985,10 @@ async function handleVisionMode(input: string, opts: CliOptions): Promise<void> 
       }
     }
 
-    process.exit(EXIT_SUCCESS)
+    await exitWithCode(EXIT_SUCCESS, metrics, 'vision', startTime, detectedFormat)
   } catch (err) {
     console.error(`\nVision error: ${err instanceof Error ? err.message : err}`)
-    process.exit(EXIT_PROCESSING_ERROR)
-  }
-}
-
-// ============================================================================
-// Image Analysis Handler
-// ============================================================================
-
-async function handleImageAnalysis(input: string, opts: CliOptions): Promise<void> {
-  const { runViewImage } = await import('../lib/images/viewImage.js')
-  const { analyzeImageStreaming, createVisionModel } = await import('../lib/images/vision.js')
-  const { createFileJournal, createMarkdownJournal, getJournalPath, getMarkdownJournalPath } =
-    await import('../lib/ai/journal.js')
-  const { parseModelSpec } = await import('../lib/ai/config.js')
-  const { getProvider, detectProvider, resolveProvider } = await import('../lib/ai/provider.js')
-  const { estimateImageTokens } = await import('../lib/ai/cost.js')
-
-  // Register all providers
-  const { registerAllProviders } = await import('../lib/ai/providers.js')
-  registerAllProviders()
-
-  const outputPath = opts.output === '-' ? undefined : opts.output
-  const streamingMode = shouldStream({ ...opts, output: outputPath })
-
-  // Resolve model: explicit --model or auto-detect from API keys
-  let visionModelSpec: string
-  if (opts.model) {
-    visionModelSpec = `${opts.model.provider}:${opts.model.model}`
-  } else {
-    const detected = detectProvider()
-    if (!detected) {
-      console.error(
-        'Error: No LLM provider available.\n' +
-          'Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_GENERATIVE_AI_API_KEY.\n' +
-          'Or specify a model with -m (e.g., -m openai:mini)',
-      )
-      process.exit(EXIT_INPUT_ERROR)
-    }
-    const provider = resolveProvider({ provider: detected.provider })
-    visionModelSpec = `${detected.provider}:${provider.defaultVisionModel}`
-    log(`Auto-detected provider: ${detected.provider}`, opts.quiet)
-  }
-
-  // Create vision model
-  const { model, providerOptions, error: modelError } = createVisionModel(visionModelSpec)
-  if (modelError || !model) {
-    console.error(`Error: ${modelError ?? 'Failed to create vision model'}`)
-    process.exit(EXIT_INPUT_ERROR)
-  }
-
-  log(`Processing: ${input}`, opts.quiet)
-
-  // Load and process image
-  const inputPath = path.resolve(input)
-  const result = await runViewImage(inputPath, {
-    filePath: input,
-    maxDimension: opts.maxDimension,
-    quality: opts.quality,
-  })
-
-  if (!result.ok) {
-    console.error(`Error: ${result.error}`)
-    process.exit(EXIT_PROCESSING_ERROR)
-  }
-  if (!result.data) {
-    console.error('Error: Failed to load image data')
-    process.exit(EXIT_PROCESSING_ERROR)
-  }
-
-  // Estimate cost
-  if (!opts.quiet) {
-    const { provider: providerName, modelId } = parseModelSpec(visionModelSpec)
-    const provider = getProvider(providerName)
-    if (provider) {
-      const modelName = modelId || provider.defaultVisionModel
-      const pricing = provider.getPricing(modelName)
-      const imageTokens = estimateImageTokens(
-        result.outputWidth ?? result.width,
-        result.outputHeight ?? result.height,
-      )
-      const inputCost = ((100 + imageTokens) / 1_000_000) * pricing.input
-      const outputCost = (500 / 1_000_000) * pricing.output
-      const costMessage = `Estimated cost: ~$${(inputCost + outputCost).toFixed(4)} (${providerName}:${modelName})`
-
-      if (!opts.yes) {
-        const confirmed = await confirmPrompt(costMessage)
-        if (!confirmed) {
-          console.error('Cancelled.')
-          process.exit(EXIT_SUCCESS)
-        }
-      } else {
-        console.error(costMessage)
-      }
-    }
-  }
-
-  log(`Analyzing with ${visionModelSpec}...`, opts.quiet)
-
-  // Set up journaling
-  let onJournal: import('../lib/ai/types.js').JournalCallback | undefined
-  const journalName = opts.journal ? generateJournalName(input, opts.journalTag) : undefined
-  if (journalName) {
-    if (opts.journalFormat === 'markdown') {
-      onJournal = await createMarkdownJournal(opts.journalDir, journalName)
-      log(`Journaling to: ${getMarkdownJournalPath(opts.journalDir, journalName)}`, opts.quiet)
-    } else {
-      onJournal = await createFileJournal(opts.journalDir, journalName)
-      log(`Journaling to: ${getJournalPath(opts.journalDir, journalName)}`, opts.quiet)
-    }
-  }
-
-  // Analyze image
-  const analysisOpts = {
-    imageData: result.data,
-    mimeType: result.mimeType ?? 'image/png',
-    prompt: opts.prompt,
-    model,
-    experiment: journalName,
-    onJournal,
-    filePath: input,
-    width: result.outputWidth ?? result.width,
-    height: result.outputHeight ?? result.height,
-    providerOptions,
-  }
-
-  try {
-    if (streamingMode) {
-      let fileStream: ReturnType<typeof createWriteStream> | undefined
-      if (outputPath) {
-        fileStream = createWriteStream(outputPath, { encoding: 'utf-8' })
-      }
-
-      for await (const chunk of analyzeImageStreaming(analysisOpts)) {
-        if (fileStream) {
-          fileStream.write(chunk)
-        } else {
-          process.stdout.write(chunk)
-        }
-      }
-
-      if (fileStream) {
-        fileStream.write('\n')
-        fileStream.end()
-        log(`Output streamed to: ${outputPath}`, opts.quiet)
-      } else {
-        console.log()
-      }
-    } else {
-      const chunks: string[] = []
-      for await (const chunk of analyzeImageStreaming(analysisOpts)) {
-        chunks.push(chunk)
-      }
-      const output = `${chunks.join('')}\n`
-
-      if (outputPath) {
-        await fs.writeFile(outputPath, output, 'utf-8')
-        log(`Output written to: ${outputPath}`, opts.quiet)
-      } else {
-        process.stdout.write(output)
-      }
-    }
-
-    process.exit(EXIT_SUCCESS)
-  } catch (err) {
-    console.error(`\nVision analysis error: ${err instanceof Error ? err.message : err}`)
-    process.exit(EXIT_PROCESSING_ERROR)
+    await exitWithCode(EXIT_PROCESSING_ERROR, metrics, 'vision', startTime, detectedFormat)
   }
 }
 

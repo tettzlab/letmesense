@@ -1,47 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
-import type { FormatPlugin } from './plugin.js'
+import { createMockPlugin, createUnit } from '../testing/index.js'
 import { buildRuns, canRender, defaultBuildRunKey, supportsOcr, supportsVision } from './plugin.js'
-import type { ContentKind, DocumentUnit } from './types.js'
-
-// Helper to create a mock unit
-function createUnit(
-  index: number,
-  kind: ContentKind = 'text-only',
-  language = 'eng',
-): DocumentUnit {
-  return {
-    index,
-    label: `Unit ${index}`,
-    kind,
-    charCount: 100,
-    language,
-    textSample: 'Sample text',
-  }
-}
-
-// Helper to create a mock plugin
-function createMockPlugin(overrides: Partial<FormatPlugin> = {}): FormatPlugin {
-  return {
-    id: 'pdf',
-    name: 'PDF Plugin',
-    extensions: ['.pdf'],
-    mimeTypes: ['application/pdf'],
-    capabilities: {
-      ocr: false,
-      vision: false,
-      streaming: false,
-      parallel: true,
-      supportsRuns: true,
-      multiUnit: true,
-    },
-    load: vi.fn(),
-    parse: vi.fn(),
-    analyzeUnit: vi.fn(),
-    classifyUnit: vi.fn(),
-    extractUnit: vi.fn(),
-    ...overrides,
-  }
-}
+import type { DocumentUnit } from './types.js'
 
 describe('defaultBuildRunKey', () => {
   it('builds key from kind and language', () => {

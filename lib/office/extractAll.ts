@@ -3,8 +3,7 @@
  * Coordinates loading, parsing, analysis, and extraction.
  */
 
-import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
 import { analyzeDocument } from './analyze.js'
 import { OfficeExtractionError, OfficeLoadError } from './errors.js'
 import {
@@ -20,6 +19,7 @@ import {
   type ParseOptions,
   parseOfficeBuffer,
 } from './parser.js'
+import { Metrics, Spans } from './signals.js'
 import { getDominantLanguage, splitIntoRuns } from './splitRuns.js'
 import type {
   AnalyzeOptions,
@@ -90,7 +90,7 @@ export async function extractFromOffice(
 ): Promise<ExtractResult> {
   const { logger, tracer, metrics } = obs('office')
 
-  return tracer.startSpan(SpanNames.OFFICE_EXTRACT, async (span) => {
+  return tracer.startSpan(Spans.EXTRACT, async (span) => {
     const startTime = performance.now()
 
     const {
@@ -102,7 +102,7 @@ export async function extractFromOffice(
       parseOptions,
 
       // Analyze options
-      minCharsForTextRich,
+      minCharsForTextOnly,
       minCharsForLangDetect,
       maxTextSampleChars,
 
@@ -111,8 +111,8 @@ export async function extractFromOffice(
       ocrLang,
       unitTimeout,
       includeNotes,
-      slideRange,
-      sheetNames,
+      slides,
+      sheets,
       headers,
 
       // Output options
@@ -128,17 +128,17 @@ export async function extractFromOffice(
     // Step 1: Load document
     let loadResult: LoadResult
     try {
-      loadResult = await tracer.startSpan(SpanNames.OFFICE_LOAD, async (loadSpan) => {
+      loadResult = await tracer.startSpan(Spans.LOAD, async (loadSpan) => {
         const result = await loadOfficeDocument(input, { format: inputFormat, timeout })
-        loadSpan.setAttribute('source', result.source)
-        loadSpan.setAttribute('format', result.format)
+        loadSpan.setAttribute(SemanticAttributes.SOURCE, result.source)
+        loadSpan.setAttribute(SemanticAttributes.FORMAT, result.format)
         return result
       })
     } catch (err) {
       span.recordException(err instanceof Error ? err : new Error(String(err)))
       span.setError('Failed to load document')
       metrics
-        .counter(SemanticMetrics.OFFICE_EXTRACTIONS_COUNT)
+        .counter(Metrics.EXTRACTION_COUNT)
         .add(1, { status: 'failure', format: inputFormat ?? 'unknown' })
       logger.error({ err }, 'Office extraction failed during load')
       throw err instanceof OfficeExtractionError
@@ -147,14 +147,14 @@ export async function extractFromOffice(
     }
 
     const { bytes, format, source } = loadResult
-    span.setAttribute('source', source)
-    span.setAttribute('format', format)
+    span.setAttribute(SemanticAttributes.SOURCE, source)
+    span.setAttribute(SemanticAttributes.FORMAT, format)
     logger.info({ source, format }, 'Starting Office extraction')
 
     // Step 2: Parse document
     let parsed: ParsedDocument
     try {
-      parsed = await tracer.startSpan(SpanNames.OFFICE_PARSE, async () => {
+      parsed = await tracer.startSpan(Spans.PARSE, async () => {
         return parseOfficeBuffer(bytes, {
           newlineDelimiter: '\n\n',
           extractAttachments: true,
@@ -165,9 +165,7 @@ export async function extractFromOffice(
     } catch (err) {
       span.recordException(err instanceof Error ? err : new Error(String(err)))
       span.setError('Failed to parse document')
-      metrics
-        .counter(SemanticMetrics.OFFICE_EXTRACTIONS_COUNT)
-        .add(1, { status: 'failure', format })
+      metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'failure', format })
       logger.error({ err }, 'Office extraction failed during parse')
       throw err instanceof OfficeExtractionError
         ? err
@@ -178,17 +176,17 @@ export async function extractFromOffice(
     const metadata: DocumentMetadata = extractMetadata(parsed)
 
     // Step 4: Analyze content units
-    const attributes = await tracer.startSpan(SpanNames.OFFICE_ANALYZE, async (analyzeSpan) => {
+    const attributes = await tracer.startSpan(Spans.ANALYZE, async (analyzeSpan) => {
       const result = await analyzeDocument(parsed, format, {
-        minCharsForTextRich,
+        minCharsForTextOnly,
         minCharsForLangDetect,
         maxTextSampleChars,
       })
-      analyzeSpan.setAttribute('unitCount', result.length)
+      analyzeSpan.setAttribute(SemanticAttributes.UNIT_COUNT, result.length)
       return result
     })
 
-    span.setAttribute('unitCount', attributes.length)
+    span.setAttribute(SemanticAttributes.UNIT_COUNT, attributes.length)
 
     // Report analysis progress
     if (progress?.onUnitAnalyzed) {
@@ -206,11 +204,11 @@ export async function extractFromOffice(
 
     // Step 5: Split into runs
     const runs = splitIntoRuns(attributes)
-    span.setAttribute('runCount', runs.length)
+    span.setAttribute(SemanticAttributes.RUN_COUNT, runs.length)
 
     // Record unit kind metrics
     for (const attr of attributes) {
-      metrics.counter(SemanticMetrics.OFFICE_UNITS_COUNT).add(1, { kind: attr.kind })
+      metrics.counter(Metrics.UNIT_COUNT).add(1, { kind: attr.kind })
     }
 
     // Step 6: Extract text
@@ -219,8 +217,8 @@ export async function extractFromOffice(
       ocrLang,
       unitTimeout,
       includeNotes,
-      slideRange,
-      sheetNames,
+      slides,
+      sheets,
       headers,
     })
 
@@ -241,9 +239,7 @@ export async function extractFromOffice(
     // Check for strict mode
     if (strict && allErrors.length > 0) {
       const errorUnits = allErrors.map((e) => e.unitIndex + 1).join(', ')
-      metrics
-        .counter(SemanticMetrics.OFFICE_EXTRACTIONS_COUNT)
-        .add(1, { status: 'failure', format })
+      metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'failure', format })
       logger.error({ errorCount: allErrors.length }, 'Office extraction failed in strict mode')
       throw new OfficeExtractionError(
         `Extraction failed for ${allErrors.length} unit(s): ${errorUnits}`,
@@ -253,10 +249,8 @@ export async function extractFromOffice(
     }
 
     // Record success metrics
-    metrics.counter(SemanticMetrics.OFFICE_EXTRACTIONS_COUNT).add(1, { status: 'success', format })
-    metrics
-      .histogram(SemanticMetrics.OFFICE_EXTRACTION_DURATION_MS)
-      .record(performance.now() - startTime)
+    metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'success', format })
+    metrics.histogram(Metrics.EXTRACTION_DURATION_MS).record(performance.now() - startTime)
 
     if (allErrors.length > 0) {
       logger.warn({ errorCount: allErrors.length }, 'Office extraction completed with errors')
@@ -292,15 +286,15 @@ export async function extractFromOfficeDetailed(
     format: inputFormat,
     timeout,
     parseOptions,
-    minCharsForTextRich,
+    minCharsForTextOnly,
     minCharsForLangDetect,
     maxTextSampleChars,
     ocr,
     ocrLang,
     unitTimeout,
     includeNotes,
-    slideRange,
-    sheetNames,
+    slides,
+    sheets,
     headers,
     unitSeparator = DEFAULT_UNIT_SEPARATOR,
     strict = false,
@@ -326,7 +320,7 @@ export async function extractFromOfficeDetailed(
 
   // Analyze
   const attributes = await analyzeDocument(parsed, format, {
-    minCharsForTextRich,
+    minCharsForTextOnly,
     minCharsForLangDetect,
     maxTextSampleChars,
   })
@@ -345,8 +339,8 @@ export async function extractFromOfficeDetailed(
     ocrLang,
     unitTimeout,
     includeNotes,
-    slideRange,
-    sheetNames,
+    slides,
+    sheets,
     headers,
   })
 

@@ -4,7 +4,6 @@
 
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { checkLibreOffice } from '../convert/libreoffice.js'
 import type { VisionContent } from './types.js'
 
@@ -41,14 +40,6 @@ async function checkConversionWorks(): Promise<boolean> {
 }
 
 describe('processor', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
   describe('prepareVisionContent', () => {
     it('prepares content with PDF for Anthropic provider', async () => {
       if (!(await checkConversionWorks()) || !hasAnthropicKey) {
@@ -57,7 +48,7 @@ describe('processor', () => {
       }
 
       // Register providers
-      const { registerAllProviders } = await import('../../ai/providers.js')
+      const { registerAllProviders } = await import('../../ai/bootstrap.js')
       registerAllProviders()
 
       const { prepareVisionContent } = await import('./processor.js')
@@ -82,7 +73,7 @@ describe('processor', () => {
       }
 
       // Register providers
-      const { registerAllProviders } = await import('../../ai/providers.js')
+      const { registerAllProviders } = await import('../../ai/bootstrap.js')
       registerAllProviders()
 
       // Need to reimport to get fresh module
@@ -108,7 +99,7 @@ describe('processor', () => {
       }
 
       // Register providers
-      const { registerAllProviders } = await import('../../ai/providers.js')
+      const { registerAllProviders } = await import('../../ai/bootstrap.js')
       registerAllProviders()
 
       const { estimateVisionCost } = await import('./processor.js')
@@ -122,7 +113,7 @@ describe('processor', () => {
           attributes: {
             unitIndex: 0,
             unitLabel: 'Slide 1',
-            kind: 'text-rich',
+            kind: 'text-only',
             charCount: 1200,
             imageCount: 0,
             textSample: 'Hello World',
@@ -132,7 +123,7 @@ describe('processor', () => {
       ]
 
       const provider = hasAnthropicKey ? 'anthropic' : 'openai'
-      const model = hasAnthropicKey ? 'claude-sonnet-4-5-20250929' : 'gpt-5.2'
+      const model = hasAnthropicKey ? 'claude-sonnet-4-5' : 'gpt-5.2'
       const estimate = estimateVisionCost(contents, {
         llm: { provider, model },
       })
@@ -149,7 +140,7 @@ describe('processor', () => {
         return
       }
 
-      const { registerAllProviders } = await import('../../ai/providers.js')
+      const { registerAllProviders } = await import('../../ai/bootstrap.js')
       registerAllProviders()
       const { estimateVisionCost } = await import('./processor.js')
 
@@ -165,7 +156,7 @@ describe('processor', () => {
   describe('formatOfficeWithVision', () => {
     it('requires API key for actual formatting', async () => {
       // Register providers
-      const { registerAllProviders } = await import('../../ai/providers.js')
+      const { registerAllProviders } = await import('../../ai/bootstrap.js')
       registerAllProviders()
 
       // This test verifies the function exists and can be imported
@@ -173,7 +164,7 @@ describe('processor', () => {
       expect(typeof formatOfficeWithVision).toBe('function')
 
       // Actual LLM calls are tested in integration tests with API keys
-    })
+    }, 15_000)
 
     it('tracks progress events', async () => {
       // This test verifies the progress callback structure
@@ -196,7 +187,7 @@ describe('processor', () => {
         return
       }
 
-      const { registerAllProviders } = await import('../../ai/providers.js')
+      const { registerAllProviders } = await import('../../ai/bootstrap.js')
       registerAllProviders()
       const { prepareVisionContent } = await import('./processor.js')
 
@@ -223,7 +214,7 @@ describe('processor integration', () => {
       return
     }
 
-    const { registerAllProviders } = await import('../../ai/providers.js')
+    const { registerAllProviders } = await import('../../ai/bootstrap.js')
     registerAllProviders()
 
     const processor = await import('./processor.js')

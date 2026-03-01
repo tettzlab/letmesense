@@ -20,8 +20,8 @@
       "import": "./dist/lib/index.js"
     },
     "./api": {
-      "types": "./dist/lib/letmesense/api.d.ts",
-      "import": "./dist/lib/letmesense/api.js"
+      "types": "./dist/lib/sense/api.d.ts",
+      "import": "./dist/lib/sense/api.js"
     },
     "./pipeline": {
       "types": "./dist/lib/pipeline/index.d.ts",
@@ -33,14 +33,16 @@
     }
   },
   "bin": {
-    "letmesense": "./dist/cli/letmesense.js"
+    "letmesense": "./dist/cli/letmesense.js",
+    "letmedense": "./dist/cli/letmedense.js"
   },
   "scripts": {
     "all": "pnpm clean:all && pnpm validate:full && pnpm build && pnpm link --global",
     "build": "tsc -p tsconfig.json",
-    "clean": "pnpm clean:all",
-    "clean:all": "rimraf build dist out .react-router coverage coverage-cli coverage-full test-results .playwright-mcp node_modules/.cache node_modules/.vite-temp .DS_Store Thumbs.db \"*.log\" \"*.tsbuildinfo\"",
+    "clean": "rimraf build coverage coverage-cli coverage-full test-results .mypy_cache .playwright-mcp node_modules/.cache node_modules/.vite-temp .DS_Store Thumbs.db \"*.log\" \"*.tsbuildinfo\"",
+    "clean:all": "pnpm clean && rimraf dist out experiments",
     "cli": "tsx cli/letmesense.ts",
+    "cli:dense": "tsx cli/letmedense.ts",
     "dev:analyze": "tsx scripts/analyze-treacherous.ts",
     "dev:extract:scanned": "tsx scripts/extract-text.ts samples/scanned-image.pdf --kind scanned-image --ocrLang eng",
     "dev:extract": "tsx scripts/extract-text.ts samples/born-digital.pdf",
@@ -63,8 +65,9 @@
     "test:parity": "./scripts/test-api-parity.sh",
     "test:watch": "vitest --watch",
     "typecheck": "tsc --noEmit",
-    "validate": "pnpm typecheck && pnpm lint && pnpm test",
-    "validate:full": "pnpm typecheck && pnpm lint && pnpm test:full",
+    "validate:static": "bash -c 'pnpm typecheck & P1=$!; pnpm lint & P2=$!; wait $P1 && wait $P2'",
+    "validate": "pnpm validate:static && pnpm test",
+    "validate:full": "pnpm validate:static && pnpm test:full",
     "validate:license": "./scripts/check-licenses.sh"
   },
   "dependencies": {
@@ -73,6 +76,7 @@
     "@ai-sdk/openai": "^3.0.6",
     "@lenml/tokenizer-claude": "^3.7.2",
     "@lenml/tokenizer-gemini": "^3.7.2",
+    "@mozilla/readability": "^0.6.0",
     "@napi-rs/canvas": "^0.1.68",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/api-logs": "^0.211.0",
@@ -104,6 +108,7 @@
     "pino-pretty": "^13.1.3",
     "sharp": "^0.34.5",
     "tesseract.js": "^6.0.0",
+    "turndown": "^7.2.2",
     "xlsx": "0.18.5",
     "zod": "^4.3.5"
   },
@@ -114,6 +119,7 @@
     "@types/jsdom": "^21.1.6",
     "@types/node": "^22",
     "@types/pdfkit": "^0.17.4",
+    "@types/turndown": "^5.0.6",
     "@vitest/coverage-v8": "^4.0.16",
     "knip": "^5.80.0",
     "mcp-remote": "^0.1.37",
@@ -123,7 +129,6 @@
     "tsx": "^4.19.0",
     "typescript": "^5.9.2",
     "vite": "^7.1.7",
-    "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^4.0.16"
   }
 }

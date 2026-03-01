@@ -3,12 +3,12 @@
  * Orchestrates format plugins to extract text from documents.
  */
 
-import { extractPreviousTail } from '../ai/format.js'
-import { PROMPTS, type PromptPreset } from '../ai/prompts.js'
+import { DEFAULT_FETCH_TIMEOUT_MS } from '../common/timeouts.js'
 import { generateCorrelationId, obsWithCorrelation } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import type { Span } from '../observability/types.js'
+import { SemanticAttributes } from '../observability/types.js'
 import { computeComplexity, getComplexitySpanAttributes } from './complexity.js'
-import { AbortError, ExtractError, LoadError, throwIfAborted, wrapError } from './errors.js'
+import { ExtractError, isAbortError, LoadError, throwIfAborted, wrapError } from './errors.js'
 import type { FormatPlugin, LoadedDocument, ParsedDocument } from './plugin.js'
 import { buildRuns, canRender, defaultBuildRunKey } from './plugin.js'
 import { ProgressReporter } from './progress.js'
@@ -17,6 +17,9 @@ import {
   type DocumentType,
   determineDocumentType,
   determineTextReliability,
+  extractPreviousTail,
+  PROMPTS,
+  type PromptPreset,
   type TextReliability,
 } from './prompts.js'
 import {
@@ -25,6 +28,7 @@ import {
   getExtension,
   type PluginRegistry,
 } from './registry.js'
+import { Metrics, Spans } from './signals.js'
 import type {
   DocumentInput,
   DocumentRun,
@@ -33,6 +37,7 @@ import type {
   ExtractedUnit,
   ExtractionResult,
   ExtractUnitsResult,
+  FormatId,
   UnitError,
   VisionChunk,
   VisionExtractOptions,
@@ -42,10 +47,27 @@ import type {
 // Pipeline Processor
 // ============================================================================
 
-// TODO: extract() and extractUnits() share ~90% of their code (load, parse, analyze,
-// classify, record metrics). Consider refactoring to a shared prepareExtraction() method
-// that returns the prepared context, with each public method handling only extraction.
-// This would reduce ~200 lines of duplication.
+/**
+ * Context returned by prepareExtraction for use in extract/extractUnits.
+ */
+interface PreparedExtraction<U extends DocumentUnit> {
+  format: FormatId
+  plugin: FormatPlugin<U>
+  doc: LoadedDocument
+  analyzedUnits: U[]
+  runs: DocumentRun<U>[]
+  metadata?: Record<string, unknown>
+}
+
+/**
+ * Mutable holder for cleanup references, populated as prepareExtraction progresses.
+ * Ensures cleanup runs even if prepareExtraction fails after loading the document.
+ */
+interface CleanupHolder {
+  format?: FormatId
+  doc?: LoadedDocument
+  plugin?: FormatPlugin
+}
 
 /**
  * Options for creating a pipeline processor.
@@ -77,7 +99,6 @@ export class PipelineProcessor {
     input: DocumentInput,
     options: ExtractAllOptions = {},
   ): Promise<ExtractionResult> {
-    // Generate correlation ID for end-to-end request tracing
     const correlationId = generateCorrelationId()
     const { logger, tracer, metrics } = obsWithCorrelation('pipeline', correlationId)
     const progress = new ProgressReporter(options.onProgress)
@@ -85,61 +106,25 @@ export class PipelineProcessor {
     const errors: UnitError[] = []
     const startTime = performance.now()
 
-    return tracer.startSpan(SpanNames.PIPELINE_EXTRACT, async (span) => {
-      span.setAttribute('source', source)
-      span.setAttribute('correlation.id', correlationId)
+    return tracer.startSpan(Spans.EXTRACT, async (span) => {
+      span.setAttribute(SemanticAttributes.SOURCE, source)
+      span.setAttribute(SemanticAttributes.CORRELATION_ID, correlationId)
 
-      progress.loadStart(source)
-
-      // 1. Detect format and get plugin
-      const detected = this.registry.detectFormat(input, { format: options.format })
-      if (!detected) {
-        metrics
-          .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-          .add(1, { status: 'error', error: 'format' })
-        logger.error({ source }, 'Cannot detect format')
-        throw new LoadError(`Cannot detect format for ${source}. Specify format explicitly.`)
-      }
-
-      const { format, plugin } = detected
-      span.setAttribute('format', format)
-      span.setAttribute('plugin', plugin.id)
-      logger.info({ source, format }, 'Starting extraction')
-
-      let doc: LoadedDocument | null = null
-
+      const holder: CleanupHolder = {}
       try {
-        // 2. Load document
-        throwIfAborted(options.signal, 'load')
-        doc = await tracer.startSpan(SpanNames.PIPELINE_LOAD, async (loadSpan) => {
-          loadSpan.setAttribute('format', format)
-          const loaded = await plugin.load(input, options as Record<string, unknown>)
-          loadSpan.setAttribute('bytes', loaded.bytes.length)
-          return loaded
-        })
-        const loadedDoc = doc
-        progress.loadDone(source, format, loadedDoc.bytes.length)
-        span.setAttribute('bytes', loadedDoc.bytes.length)
+        const { format, plugin, doc, analyzedUnits, runs, metadata } =
+          await this.prepareExtraction<U>(
+            input,
+            options,
+            { logger, tracer, metrics },
+            progress,
+            source,
+            span,
+            errors,
+            holder,
+          )
 
-        // 3. Parse into units
-        throwIfAborted(options.signal, 'parse')
-        progress.parseStart(format)
-        const parsed = await tracer.startSpan(SpanNames.PIPELINE_PARSE, async (parseSpan) => {
-          parseSpan.setAttribute('format', format)
-          const result = (await plugin.parse(
-            loadedDoc,
-            options as Record<string, unknown>,
-          )) as ParsedDocument<U>
-          parseSpan.setAttribute('unitCount', result.units.length)
-          return result
-        })
-        progress.parseDone(parsed.units.length)
-
-        if (parsed.units.length === 0) {
-          logger.info({ source, format }, 'Document has no units')
-          metrics
-            .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-            .add(1, { status: 'empty', format })
+        if (analyzedUnits.length === 0) {
           return {
             text: '',
             source,
@@ -147,119 +132,27 @@ export class PipelineProcessor {
             unitCount: 0,
             runCount: 0,
             errors: [],
-            metadata: options.includeMetadata ? parsed.metadata : undefined,
+            metadata: options.includeMetadata ? metadata : undefined,
           }
         }
 
-        // 4. Analyze units
-        throwIfAborted(options.signal, 'analyze')
-        progress.analyzeStart(parsed.units.length)
-        const analyzedUnits = await tracer.startSpan(
-          SpanNames.PIPELINE_ANALYZE,
-          async (analyzeSpan) => {
-            analyzeSpan.setAttribute('unitCount', parsed.units.length)
-            const units = await this.analyzeUnits(
-              parsed.units,
-              loadedDoc,
-              plugin as FormatPlugin<U>,
-              options,
-              progress,
-              errors,
-            )
-            analyzeSpan.setAttribute('analyzedCount', units.length)
-            return units
-          },
-        )
-        progress.analyzeDone(analyzedUnits.length)
-
-        // 5. Classify and group into runs
-        throwIfAborted(options.signal, 'extract')
-        const runs = await tracer.startSpan(SpanNames.PIPELINE_CLASSIFY, async (classifySpan) => {
-          for (const unit of analyzedUnits) {
-            unit.kind = plugin.classifyUnit(unit)
-          }
-          const buildKey = plugin.buildRunKey?.bind(plugin) ?? defaultBuildRunKey
-          const result = buildRuns(analyzedUnits, buildKey)
-          classifySpan.setAttribute('runCount', result.length)
-          return result
-        })
-
-        // Compute and record document complexity
-        const complexity = computeComplexity(analyzedUnits)
-        const complexityAttrs = getComplexitySpanAttributes(complexity, format)
-        span.setAttributes(complexityAttrs)
-        metrics
-          .histogram(SemanticMetrics.DOCUMENT_COMPLEXITY_SCORE)
-          .record(complexity.score, { format })
-        metrics
-          .histogram(SemanticMetrics.DOCUMENT_PAGE_COUNT)
-          .record(complexity.pageCount, { format })
-        logger.debug(
-          { format, complexity: complexity.score, pageCount: complexity.pageCount },
-          'Document complexity calculated',
-        )
-
-        // Record unit kind distribution
-        const kindCounts: Record<string, number> = {}
-        for (const unit of analyzedUnits) {
-          kindCounts[unit.kind] = (kindCounts[unit.kind] ?? 0) + 1
-        }
-        for (const [kind, count] of Object.entries(kindCounts)) {
-          metrics.counter(SemanticMetrics.PIPELINE_UNITS_COUNT).add(count, { format, kind })
-        }
-
-        // 6. Extract text from runs
+        // Extract text from runs
         progress.extractStart(runs.length)
         const separator = options.separator ?? '\n\n'
-        const texts = await tracer.startSpan(
-          SpanNames.PIPELINE_EXTRACT_RUNS,
-          async (extractSpan) => {
-            extractSpan.setAttribute('runCount', runs.length)
-            extractSpan.setAttribute('parallel', options.parallel ?? true)
-            return this.extractRuns(
-              runs,
-              loadedDoc,
-              plugin as FormatPlugin<U>,
-              options,
-              progress,
-              errors,
-            )
-          },
-        )
+        const texts = await tracer.startSpan(Spans.EXTRACT_RUNS, async (extractSpan) => {
+          extractSpan.setAttribute(SemanticAttributes.RUN_COUNT, runs.length)
+          extractSpan.setAttribute('parallel', options.parallel ?? true)
+          return this.extractRuns(runs, doc, plugin, options, progress, errors)
+        })
         progress.extractDone(texts.join(separator).length)
 
-        // 7. Build result
         const text = texts.join(separator)
-        const durationMs = Math.round(performance.now() - startTime)
 
-        span.setAttribute('unitCount', analyzedUnits.length)
-        span.setAttribute('runCount', runs.length)
-        span.setAttribute('charCount', text.length)
-        span.setAttribute('errorCount', errors.length)
-        span.setAttribute('durationMs', durationMs)
-
-        // Record metrics
-        metrics
-          .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-          .add(1, { status: 'success', format })
-        metrics.counter(SemanticMetrics.PIPELINE_RUNS_COUNT).add(runs.length, { format })
-        metrics
-          .histogram(SemanticMetrics.PIPELINE_EXTRACTION_DURATION_MS)
-          .record(durationMs, { format })
-        metrics.histogram(SemanticMetrics.PIPELINE_EXTRACTION_CHARS).record(text.length, { format })
-
-        if (errors.length > 0) {
-          metrics.counter(SemanticMetrics.PIPELINE_ERRORS_COUNT).add(errors.length, { format })
-          logger.warn(
-            { source, format, errorCount: errors.length },
-            'Extraction completed with errors',
-          )
-        } else {
-          logger.info(
-            { source, format, unitCount: analyzedUnits.length, runCount: runs.length, durationMs },
-            'Extraction completed',
-          )
-        }
+        this.recordExtractionMetrics(
+          span,
+          { logger, metrics },
+          { source, format, analyzedUnits, runs, text, errors, startTime },
+        )
 
         return {
           text,
@@ -268,25 +161,19 @@ export class PipelineProcessor {
           unitCount: analyzedUnits.length,
           runCount: runs.length,
           errors,
-          metadata: options.includeMetadata ? parsed.metadata : undefined,
+          metadata: options.includeMetadata ? metadata : undefined,
         }
       } catch (err) {
-        // Record failure metrics (unless aborted)
-        if (!(err instanceof AbortError)) {
+        if (!isAbortError(err) && holder.format) {
           metrics
-            .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-            .add(1, { status: 'error', format })
-          logger.error({ err, source, format }, 'Extraction failed')
+            .counter(Metrics.EXTRACTION_COUNT)
+            .add(1, { status: 'error', format: holder.format })
+          logger.error({ err, source, format: holder.format }, 'Extraction failed')
         }
         throw err
       } finally {
-        // 8. Cleanup
-        if (doc && plugin.cleanup) {
-          try {
-            await plugin.cleanup(doc)
-          } catch {
-            // Ignore cleanup errors
-          }
+        if (holder.doc && holder.plugin) {
+          await this.cleanupDoc(holder.doc, holder.plugin)
         }
       }
     })
@@ -304,7 +191,6 @@ export class PipelineProcessor {
     input: DocumentInput,
     options: ExtractAllOptions = {},
   ): Promise<ExtractUnitsResult> {
-    // Generate correlation ID for end-to-end request tracing
     const correlationId = generateCorrelationId()
     const { logger, tracer, metrics } = obsWithCorrelation('pipeline', correlationId)
     const progress = new ProgressReporter(options.onProgress)
@@ -312,62 +198,26 @@ export class PipelineProcessor {
     const errors: UnitError[] = []
     const startTime = performance.now()
 
-    return tracer.startSpan(SpanNames.PIPELINE_EXTRACT, async (span) => {
-      span.setAttribute('source', source)
-      span.setAttribute('correlation.id', correlationId)
+    return tracer.startSpan(Spans.EXTRACT, async (span) => {
+      span.setAttribute(SemanticAttributes.SOURCE, source)
+      span.setAttribute(SemanticAttributes.CORRELATION_ID, correlationId)
       span.setAttribute('extractUnits', true)
 
-      progress.loadStart(source)
-
-      // 1. Detect format and get plugin
-      const detected = this.registry.detectFormat(input, { format: options.format })
-      if (!detected) {
-        metrics
-          .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-          .add(1, { status: 'error', error: 'format' })
-        logger.error({ source }, 'Cannot detect format')
-        throw new LoadError(`Cannot detect format for ${source}. Specify format explicitly.`)
-      }
-
-      const { format, plugin } = detected
-      span.setAttribute('format', format)
-      span.setAttribute('plugin', plugin.id)
-      logger.info({ source, format }, 'Starting extraction with units')
-
-      let doc: LoadedDocument | null = null
-
+      const holder: CleanupHolder = {}
       try {
-        // 2. Load document
-        throwIfAborted(options.signal, 'load')
-        doc = await tracer.startSpan(SpanNames.PIPELINE_LOAD, async (loadSpan) => {
-          loadSpan.setAttribute('format', format)
-          const loaded = await plugin.load(input, options as Record<string, unknown>)
-          loadSpan.setAttribute('bytes', loaded.bytes.length)
-          return loaded
-        })
-        const loadedDoc = doc
-        progress.loadDone(source, format, loadedDoc.bytes.length)
-        span.setAttribute('bytes', loadedDoc.bytes.length)
+        const { format, plugin, doc, analyzedUnits, runs, metadata } =
+          await this.prepareExtraction<U>(
+            input,
+            options,
+            { logger, tracer, metrics },
+            progress,
+            source,
+            span,
+            errors,
+            holder,
+          )
 
-        // 3. Parse into units
-        throwIfAborted(options.signal, 'parse')
-        progress.parseStart(format)
-        const parsed = await tracer.startSpan(SpanNames.PIPELINE_PARSE, async (parseSpan) => {
-          parseSpan.setAttribute('format', format)
-          const result = (await plugin.parse(
-            loadedDoc,
-            options as Record<string, unknown>,
-          )) as ParsedDocument<U>
-          parseSpan.setAttribute('unitCount', result.units.length)
-          return result
-        })
-        progress.parseDone(parsed.units.length)
-
-        if (parsed.units.length === 0) {
-          logger.info({ source, format }, 'Document has no units')
-          metrics
-            .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-            .add(1, { status: 'empty', format })
+        if (analyzedUnits.length === 0) {
           return {
             units: [],
             result: {
@@ -377,129 +227,42 @@ export class PipelineProcessor {
               unitCount: 0,
               runCount: 0,
               errors: [],
-              metadata: options.includeMetadata ? parsed.metadata : undefined,
+              metadata: options.includeMetadata ? metadata : undefined,
             },
           }
         }
 
-        // 4. Analyze units
-        throwIfAborted(options.signal, 'analyze')
-        progress.analyzeStart(parsed.units.length)
-        const analyzedUnits = await tracer.startSpan(
-          SpanNames.PIPELINE_ANALYZE,
-          async (analyzeSpan) => {
-            analyzeSpan.setAttribute('unitCount', parsed.units.length)
-            const units = await this.analyzeUnits(
-              parsed.units,
-              loadedDoc,
-              plugin as FormatPlugin<U>,
-              options,
-              progress,
-              errors,
-            )
-            analyzeSpan.setAttribute('analyzedCount', units.length)
-            return units
-          },
-        )
-        progress.analyzeDone(analyzedUnits.length)
-
-        // 5. Classify and group into runs
-        throwIfAborted(options.signal, 'extract')
-        const runs = await tracer.startSpan(SpanNames.PIPELINE_CLASSIFY, async (classifySpan) => {
-          for (const unit of analyzedUnits) {
-            unit.kind = plugin.classifyUnit(unit)
-          }
-          const buildKey = plugin.buildRunKey?.bind(plugin) ?? defaultBuildRunKey
-          const result = buildRuns(analyzedUnits, buildKey)
-          classifySpan.setAttribute('runCount', result.length)
-          return result
-        })
-
-        // Compute and record document complexity
-        const complexity = computeComplexity(analyzedUnits)
-        const complexityAttrs = getComplexitySpanAttributes(complexity, format)
-        span.setAttributes(complexityAttrs)
-        metrics
-          .histogram(SemanticMetrics.DOCUMENT_COMPLEXITY_SCORE)
-          .record(complexity.score, { format })
-        metrics
-          .histogram(SemanticMetrics.DOCUMENT_PAGE_COUNT)
-          .record(complexity.pageCount, { format })
-        logger.debug(
-          { format, complexity: complexity.score, pageCount: complexity.pageCount },
-          'Document complexity calculated',
-        )
-
-        // Record unit kind distribution
-        const kindCounts: Record<string, number> = {}
-        for (const unit of analyzedUnits) {
-          kindCounts[unit.kind] = (kindCounts[unit.kind] ?? 0) + 1
-        }
-        for (const [kind, count] of Object.entries(kindCounts)) {
-          metrics.counter(SemanticMetrics.PIPELINE_UNITS_COUNT).add(count, { format, kind })
-        }
-
-        // 6. Extract text from each unit individually
+        // Extract text from each unit individually
         progress.extractStart(runs.length)
         const separator = options.separator ?? '\n\n'
-        const parallel = options.parallel ?? true
 
-        const extractedUnits = await tracer.startSpan(
-          SpanNames.PIPELINE_EXTRACT_RUNS,
-          async (extractSpan) => {
-            extractSpan.setAttribute('runCount', runs.length)
-            extractSpan.setAttribute('extractingUnits', true)
-            extractSpan.setAttribute('parallel', parallel && plugin.capabilities.parallel)
-
-            return this.extractUnitsFromRuns(
-              runs,
-              loadedDoc,
-              plugin as FormatPlugin<U>,
-              options,
-              progress,
-              errors,
-              analyzedUnits.length,
-            )
-          },
-        )
+        const extractedUnits = await tracer.startSpan(Spans.EXTRACT_RUNS, async (extractSpan) => {
+          const parallel = options.parallel ?? true
+          extractSpan.setAttribute(SemanticAttributes.RUN_COUNT, runs.length)
+          extractSpan.setAttribute('extractingUnits', true)
+          extractSpan.setAttribute('parallel', parallel && plugin.capabilities.parallel)
+          return this.extractUnitsFromRuns(
+            runs,
+            doc,
+            plugin,
+            options,
+            progress,
+            errors,
+            analyzedUnits.length,
+          )
+        })
 
         // Sort units by index to ensure correct order
         extractedUnits.sort((a, b) => a.index - b.index)
 
-        // 7. Build concatenated text for the result
         const text = extractedUnits.map((u) => u.text).join(separator)
         progress.extractDone(text.length)
 
-        const durationMs = Math.round(performance.now() - startTime)
-
-        span.setAttribute('unitCount', analyzedUnits.length)
-        span.setAttribute('runCount', runs.length)
-        span.setAttribute('charCount', text.length)
-        span.setAttribute('errorCount', errors.length)
-        span.setAttribute('durationMs', durationMs)
-
-        // Record metrics
-        metrics
-          .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-          .add(1, { status: 'success', format })
-        metrics.counter(SemanticMetrics.PIPELINE_RUNS_COUNT).add(runs.length, { format })
-        metrics
-          .histogram(SemanticMetrics.PIPELINE_EXTRACTION_DURATION_MS)
-          .record(durationMs, { format })
-        metrics.histogram(SemanticMetrics.PIPELINE_EXTRACTION_CHARS).record(text.length, { format })
-
-        if (errors.length > 0) {
-          metrics.counter(SemanticMetrics.PIPELINE_ERRORS_COUNT).add(errors.length, { format })
-          logger.warn(
-            { source, format, errorCount: errors.length },
-            'Extraction with units completed with errors',
-          )
-        } else {
-          logger.info(
-            { source, format, unitCount: analyzedUnits.length, runCount: runs.length, durationMs },
-            'Extraction with units completed',
-          )
-        }
+        this.recordExtractionMetrics(
+          span,
+          { logger, metrics },
+          { source, format, analyzedUnits, runs, text, errors, startTime, label: 'with units' },
+        )
 
         return {
           units: extractedUnits,
@@ -510,26 +273,20 @@ export class PipelineProcessor {
             unitCount: analyzedUnits.length,
             runCount: runs.length,
             errors,
-            metadata: options.includeMetadata ? parsed.metadata : undefined,
+            metadata: options.includeMetadata ? metadata : undefined,
           },
         }
       } catch (err) {
-        // Record failure metrics (unless aborted)
-        if (!(err instanceof AbortError)) {
+        if (!isAbortError(err) && holder.format) {
           metrics
-            .counter(SemanticMetrics.PIPELINE_EXTRACTIONS_COUNT)
-            .add(1, { status: 'error', format })
-          logger.error({ err, source, format }, 'Extraction with units failed')
+            .counter(Metrics.EXTRACTION_COUNT)
+            .add(1, { status: 'error', format: holder.format })
+          logger.error({ err, source, format: holder.format }, 'Extraction with units failed')
         }
         throw err
       } finally {
-        // 8. Cleanup
-        if (doc && plugin.cleanup) {
-          try {
-            await plugin.cleanup(doc)
-          } catch {
-            // Ignore cleanup errors
-          }
+        if (holder.doc && holder.plugin) {
+          await this.cleanupDoc(holder.doc, holder.plugin)
         }
       }
     })
@@ -556,12 +313,28 @@ export class PipelineProcessor {
     // We can't wrap a generator in startSpan, so we record metrics manually
     logger.info({ source, model: options.model, correlationId }, 'Starting vision extraction')
 
+    // 0. Resolve HTTP(S) URL to bytes + mimeType (smart routing)
+    let resolvedInput: DocumentInput = input
+    let resolvedMimeType: string | undefined
+    let resolvedSourceUrl: string | undefined
+    const urlResolved = await this.resolveUrlInput(input, options, {
+      tracer,
+      metrics,
+      logger,
+    })
+    if (urlResolved) {
+      resolvedInput = urlResolved.bytes
+      resolvedMimeType = urlResolved.mimeType
+      resolvedSourceUrl = urlResolved.finalUrl
+    }
+
     // 1. Detect format and get plugin
-    const detected = this.registry.detectFormat(input, { format: options.format })
+    const detected = this.registry.detectFormat(resolvedInput, {
+      format: options.format,
+      mimeType: resolvedMimeType,
+    })
     if (!detected) {
-      metrics
-        .counter(SemanticMetrics.PIPELINE_VISION_EXTRACTIONS_COUNT)
-        .add(1, { status: 'error', error: 'format' })
+      metrics.counter(Metrics.VISION_EXTRACTION_COUNT).add(1, { status: 'error', error: 'format' })
       logger.error({ source }, 'Cannot detect format for vision extraction')
       throw new LoadError(`Cannot detect format for ${source}. Specify format explicitly.`)
     }
@@ -571,7 +344,7 @@ export class PipelineProcessor {
     // Check vision capability
     if (!plugin.capabilities.vision || !canRender(plugin)) {
       metrics
-        .counter(SemanticMetrics.PIPELINE_VISION_EXTRACTIONS_COUNT)
+        .counter(Metrics.VISION_EXTRACTION_COUNT)
         .add(1, { status: 'error', error: 'capability' })
       logger.error({ source, format, plugin: plugin.id }, 'Plugin does not support vision')
       throw new ExtractError(`Plugin ${plugin.id} does not support vision extraction.`)
@@ -581,9 +354,7 @@ export class PipelineProcessor {
     const { createVisionModel, analyzeImageStreaming } = await import('../images/vision.js')
     const { model, error: modelError } = createVisionModel(options.model)
     if (!model) {
-      metrics
-        .counter(SemanticMetrics.PIPELINE_VISION_EXTRACTIONS_COUNT)
-        .add(1, { status: 'error', error: 'model' })
+      metrics.counter(Metrics.VISION_EXTRACTION_COUNT).add(1, { status: 'error', error: 'model' })
       logger.error(
         { source, modelSpec: options.model, modelError },
         'Failed to create vision model',
@@ -596,31 +367,35 @@ export class PipelineProcessor {
     let unitCount = 0
     let errorCount = 0
 
+    // Merge sourceUrl into options so plugins can preserve URL provenance
+    const loadOptions = resolvedSourceUrl ? { ...options, sourceUrl: resolvedSourceUrl } : options
+
     try {
       // 2. Load and parse
       throwIfAborted(options.signal, 'load')
-      doc = await tracer.startSpan(SpanNames.PIPELINE_VISION_LOAD, async (loadSpan) => {
-        loadSpan.setAttribute('format', format)
-        return plugin.load(input, options as unknown as Record<string, unknown>)
+      doc = await tracer.startSpan(Spans.VISION_LOAD, async (loadSpan) => {
+        loadSpan.setAttribute(SemanticAttributes.FORMAT, format)
+        return plugin.load(resolvedInput, loadOptions as unknown as Record<string, unknown>)
       })
       const loadedDoc = doc
 
       throwIfAborted(options.signal, 'parse')
-      const parsed = await tracer.startSpan(SpanNames.PIPELINE_VISION_PARSE, async (parseSpan) => {
-        parseSpan.setAttribute('format', format)
+      const parsed = await tracer.startSpan(Spans.VISION_PARSE, async (parseSpan) => {
+        parseSpan.setAttribute(SemanticAttributes.FORMAT, format)
         const result = (await plugin.parse(
           loadedDoc,
           options as unknown as Record<string, unknown>,
         )) as ParsedDocument<U>
-        parseSpan.setAttribute('unitCount', result.units.length)
+        parseSpan.setAttribute(SemanticAttributes.UNIT_COUNT, result.units.length)
         return result
       })
 
+      // Yield metadata (always, so callers get the detected format)
+      yield { type: 'metadata', metadata: parsed.metadata ?? {}, format }
+
       if (parsed.units.length === 0) {
         logger.info({ source, format }, 'Document has no units for vision extraction')
-        metrics
-          .counter(SemanticMetrics.PIPELINE_VISION_EXTRACTIONS_COUNT)
-          .add(1, { status: 'empty', format })
+        metrics.counter(Metrics.VISION_EXTRACTION_COUNT).add(1, { status: 'empty', format })
         return
       }
 
@@ -645,23 +420,26 @@ export class PipelineProcessor {
           let extractionMethod: 'digital' | 'ocr' | 'vision' | 'hybrid' | undefined
           let extractionConfidence: number | undefined
           try {
-            const extraction = await tracer.startSpan(
-              SpanNames.PIPELINE_VISION_EXTRACT,
-              async (extractSpan) => {
-                extractSpan.setAttribute('unitIndex', unit.index)
-                const result = await plugin.extractUnit(
-                  unit,
-                  loadedDoc,
-                  options as unknown as Record<string, unknown>,
+            const extraction = await tracer.startSpan(Spans.VISION_EXTRACT, async (extractSpan) => {
+              extractSpan.setAttribute(SemanticAttributes.UNIT_INDEX, unit.index)
+              const result = await plugin.extractUnit(
+                unit,
+                loadedDoc,
+                options as unknown as Record<string, unknown>,
+              )
+              extractSpan.setAttribute(SemanticAttributes.CHAR_COUNT, result.charCount)
+              extractSpan.setAttribute(
+                SemanticAttributes.METHOD,
+                result.extraction?.method ?? 'unknown',
+              )
+              if (result.extraction?.confidence !== undefined) {
+                extractSpan.setAttribute(
+                  SemanticAttributes.CONFIDENCE,
+                  result.extraction.confidence,
                 )
-                extractSpan.setAttribute('charCount', result.charCount)
-                extractSpan.setAttribute('method', result.extraction?.method ?? 'unknown')
-                if (result.extraction?.confidence !== undefined) {
-                  extractSpan.setAttribute('confidence', result.extraction.confidence)
-                }
-                return result
-              },
-            )
+              }
+              return result
+            })
             // Only include text if we got meaningful content
             if (extraction.text && extraction.charCount > 0) {
               extractedText = extraction.text
@@ -686,23 +464,20 @@ export class PipelineProcessor {
           }
 
           // Render unit to image
-          const rendered = await tracer.startSpan(
-            SpanNames.PIPELINE_VISION_RENDER,
-            async (renderSpan) => {
-              renderSpan.setAttribute('unitIndex', unit.index)
-              renderSpan.setAttribute('scale', options.renderScale ?? 2)
-              const result = await plugin.renderUnit?.(unit, loadedDoc, {
-                scale: options.renderScale ?? 2,
-                usePlaywright: options.usePlaywright,
-                textForCjkDetection: extractedText,
-              })
-              if (result) {
-                renderSpan.setAttribute('width', result.width)
-                renderSpan.setAttribute('height', result.height)
-              }
-              return result
-            },
-          )
+          const rendered = await tracer.startSpan(Spans.VISION_RENDER, async (renderSpan) => {
+            renderSpan.setAttribute(SemanticAttributes.UNIT_INDEX, unit.index)
+            renderSpan.setAttribute(SemanticAttributes.SCALE, options.renderScale ?? 2)
+            const result = await plugin.renderUnit?.(unit, loadedDoc, {
+              scale: options.renderScale ?? 2,
+              usePlaywright: options.usePlaywright,
+              textForCjkDetection: extractedText,
+            })
+            if (result) {
+              renderSpan.setAttribute(SemanticAttributes.WIDTH, result.width)
+              renderSpan.setAttribute(SemanticAttributes.HEIGHT, result.height)
+            }
+            return result
+          })
 
           if (!rendered) {
             throw new ExtractError(`Failed to render unit ${unit.index}`)
@@ -747,15 +522,9 @@ export class PipelineProcessor {
 
           totalChars += charCount
           const unitDurationMs = Math.round(performance.now() - unitStartTime)
-          metrics
-            .counter(SemanticMetrics.PIPELINE_VISION_UNITS_COUNT)
-            .add(1, { format, status: 'success' })
-          metrics
-            .histogram(SemanticMetrics.PIPELINE_VISION_UNIT_CHARS)
-            .record(charCount, { format })
-          metrics
-            .histogram(SemanticMetrics.PIPELINE_VISION_UNIT_DURATION_MS)
-            .record(unitDurationMs, { format })
+          metrics.counter(Metrics.VISION_UNIT_COUNT).add(1, { format, status: 'success' })
+          metrics.histogram(Metrics.VISION_UNIT_CHARS).record(charCount, { format })
+          metrics.histogram(Metrics.VISION_UNIT_DURATION_MS).record(unitDurationMs, { format })
 
           logger.debug(
             { unitIndex: unit.index, charCount, durationMs: unitDurationMs },
@@ -771,9 +540,7 @@ export class PipelineProcessor {
             message: err instanceof Error ? err.message : String(err),
             cause: err instanceof Error ? err : undefined,
           }
-          metrics
-            .counter(SemanticMetrics.PIPELINE_VISION_UNITS_COUNT)
-            .add(1, { format, status: 'error' })
+          metrics.counter(Metrics.VISION_UNIT_COUNT).add(1, { format, status: 'error' })
           logger.error({ err, unitIndex: unit.index }, 'Vision unit failed')
           yield { type: 'error', error }
         }
@@ -781,18 +548,12 @@ export class PipelineProcessor {
 
       // Record overall metrics
       const durationMs = Math.round(performance.now() - startTime)
-      metrics
-        .counter(SemanticMetrics.PIPELINE_VISION_EXTRACTIONS_COUNT)
-        .add(1, { status: 'success', format })
-      metrics
-        .histogram(SemanticMetrics.PIPELINE_VISION_EXTRACTION_DURATION_MS)
-        .record(durationMs, { format })
-      metrics
-        .histogram(SemanticMetrics.PIPELINE_VISION_EXTRACTION_CHARS)
-        .record(totalChars, { format })
+      metrics.counter(Metrics.VISION_EXTRACTION_COUNT).add(1, { status: 'success', format })
+      metrics.histogram(Metrics.VISION_EXTRACTION_DURATION_MS).record(durationMs, { format })
+      metrics.histogram(Metrics.VISION_EXTRACTION_CHARS).record(totalChars, { format })
 
       if (errorCount > 0) {
-        metrics.counter(SemanticMetrics.PIPELINE_VISION_ERRORS_COUNT).add(errorCount, { format })
+        metrics.counter(Metrics.VISION_ERROR_COUNT).add(errorCount, { format })
         logger.warn(
           { source, format, unitCount, errorCount, totalChars, durationMs },
           'Vision extraction completed with errors',
@@ -805,20 +566,14 @@ export class PipelineProcessor {
       }
     } catch (err) {
       // Record failure metrics (unless aborted)
-      if (!(err instanceof AbortError)) {
-        metrics
-          .counter(SemanticMetrics.PIPELINE_VISION_EXTRACTIONS_COUNT)
-          .add(1, { status: 'error', format })
+      if (!isAbortError(err)) {
+        metrics.counter(Metrics.VISION_EXTRACTION_COUNT).add(1, { status: 'error', format })
         logger.error({ err, source, format }, 'Vision extraction failed')
       }
       throw err
     } finally {
-      if (doc && plugin.cleanup) {
-        try {
-          await plugin.cleanup(doc)
-        } catch {
-          // Ignore cleanup errors
-        }
+      if (doc) {
+        await this.cleanupDoc(doc, plugin)
       }
     }
   }
@@ -874,8 +629,301 @@ export class PipelineProcessor {
   }
 
   // ============================================================================
+  // URL Resolution
+  // ============================================================================
+
+  /**
+   * Resolve an HTTP(S) URL input by fetching the content and extracting Content-Type.
+   * Returns bytes + mimeType for format detection, or null if input is not a URL.
+   */
+  private async resolveUrlInput(
+    input: DocumentInput,
+    options: ExtractAllOptions,
+    obs: {
+      tracer: ReturnType<typeof obsWithCorrelation>['tracer']
+      metrics: ReturnType<typeof obsWithCorrelation>['metrics']
+      logger: ReturnType<typeof obsWithCorrelation>['logger']
+    },
+  ): Promise<{ bytes: Uint8Array; mimeType?: string; finalUrl: string } | null> {
+    if (!isHttpUrl(input)) return null
+
+    const { tracer, metrics, logger } = obs
+    const url = typeof input === 'string' ? input : input.toString()
+
+    return tracer.startSpan(Spans.URL_RESOLVE, async (span) => {
+      span.setAttribute('url.original', url)
+
+      const timeout =
+        (options as Record<string, unknown>).fetchTimeout ??
+        (options as Record<string, unknown>).timeout ??
+        DEFAULT_FETCH_TIMEOUT_MS
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), timeout as number)
+
+      // Combine user signal with timeout
+      const signal = options.signal
+      if (signal) {
+        signal.addEventListener('abort', () => controller.abort(), { once: true })
+      }
+
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'letmesense/1.0',
+            Accept: '*/*',
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+        }
+
+        const contentType = response.headers.get('content-type')
+        const mimeType = contentType?.split(';')[0].trim()
+        const finalUrl = response.url || url
+
+        const buffer = await response.arrayBuffer()
+        const bytes = new Uint8Array(buffer)
+
+        span.setAttribute(SemanticAttributes.BYTES, bytes.length)
+        if (mimeType) span.setAttribute('mime.type', mimeType)
+        span.setAttribute('url.final', finalUrl)
+
+        metrics.counter(Metrics.URL_RESOLVE_COUNT).add(1, { status: 'success' })
+        metrics.histogram(Metrics.URL_RESOLVE_BYTES).record(bytes.length)
+        logger.debug({ url, finalUrl, mimeType, bytes: bytes.length }, 'URL resolved')
+
+        return { bytes, mimeType, finalUrl }
+      } catch (err) {
+        metrics.counter(Metrics.URL_RESOLVE_COUNT).add(1, { status: 'error' })
+        throw err
+      } finally {
+        clearTimeout(timeoutId)
+      }
+    })
+  }
+
+  // ============================================================================
   // Private Helpers
   // ============================================================================
+
+  /**
+   * Shared preparation pipeline: detect → load → parse → analyze → classify → complexity.
+   * Returns empty analyzedUnits if document has no units (callers handle empty result).
+   */
+  private async prepareExtraction<U extends DocumentUnit>(
+    input: DocumentInput,
+    options: ExtractAllOptions,
+    obs: {
+      logger: ReturnType<typeof obsWithCorrelation>['logger']
+      tracer: ReturnType<typeof obsWithCorrelation>['tracer']
+      metrics: ReturnType<typeof obsWithCorrelation>['metrics']
+    },
+    progress: ProgressReporter,
+    source: string,
+    span: Span,
+    errors: UnitError[],
+    holder: CleanupHolder,
+  ): Promise<PreparedExtraction<U>> {
+    const { logger, tracer, metrics } = obs
+
+    progress.loadStart(source)
+
+    // 0. Resolve HTTP(S) URL to bytes + mimeType (smart routing)
+    let resolvedInput: DocumentInput = input
+    let resolvedMimeType: string | undefined
+    let resolvedSourceUrl: string | undefined
+    const urlResolved = await this.resolveUrlInput(input, options, obs)
+    if (urlResolved) {
+      resolvedInput = urlResolved.bytes
+      resolvedMimeType = urlResolved.mimeType
+      resolvedSourceUrl = urlResolved.finalUrl
+    }
+
+    // 1. Detect format and get plugin
+    const detected = this.registry.detectFormat(resolvedInput, {
+      format: options.format,
+      mimeType: resolvedMimeType,
+    })
+    if (!detected) {
+      metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'error', error: 'format' })
+      logger.error({ source }, 'Cannot detect format')
+      throw new LoadError(`Cannot detect format for ${source}. Specify format explicitly.`)
+    }
+
+    const { format, plugin } = detected
+    holder.format = format
+    span.setAttribute(SemanticAttributes.FORMAT, format)
+    span.setAttribute('plugin', plugin.id)
+    logger.info({ source, format }, 'Starting extraction')
+
+    // Merge sourceUrl into options so plugins can preserve URL provenance
+    const loadOptions = resolvedSourceUrl ? { ...options, sourceUrl: resolvedSourceUrl } : options
+
+    // 2. Load document
+    throwIfAborted(options.signal, 'load')
+    const doc = await tracer.startSpan(Spans.LOAD, async (loadSpan) => {
+      loadSpan.setAttribute(SemanticAttributes.FORMAT, format)
+      const loaded = await plugin.load(resolvedInput, loadOptions as Record<string, unknown>)
+      loadSpan.setAttribute(SemanticAttributes.BYTES, loaded.bytes.length)
+      return loaded
+    })
+    // Populate holder so cleanup runs even if later steps throw
+    holder.doc = doc
+    holder.plugin = plugin
+    progress.loadDone(source, format, doc.bytes.length)
+    span.setAttribute(SemanticAttributes.BYTES, doc.bytes.length)
+
+    // 3. Parse into units
+    throwIfAborted(options.signal, 'parse')
+    progress.parseStart(format)
+    const parsed = await tracer.startSpan(Spans.PARSE, async (parseSpan) => {
+      parseSpan.setAttribute(SemanticAttributes.FORMAT, format)
+      const result = (await plugin.parse(
+        doc,
+        options as Record<string, unknown>,
+      )) as ParsedDocument<U>
+      parseSpan.setAttribute(SemanticAttributes.UNIT_COUNT, result.units.length)
+      return result
+    })
+    progress.parseDone(parsed.units.length)
+
+    if (parsed.units.length === 0) {
+      logger.info({ source, format }, 'Document has no units')
+      metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'empty', format })
+      return {
+        format,
+        plugin: plugin as FormatPlugin<U>,
+        doc,
+        analyzedUnits: [] as U[],
+        runs: [],
+        metadata: parsed.metadata,
+      }
+    }
+
+    // 4. Analyze units
+    throwIfAborted(options.signal, 'analyze')
+    progress.analyzeStart(parsed.units.length)
+    const analyzedUnits = await tracer.startSpan(Spans.ANALYZE, async (analyzeSpan) => {
+      analyzeSpan.setAttribute(SemanticAttributes.UNIT_COUNT, parsed.units.length)
+      const units = await this.analyzeUnits(
+        parsed.units,
+        doc,
+        plugin as FormatPlugin<U>,
+        options,
+        progress,
+        errors,
+      )
+      analyzeSpan.setAttribute('analyzedCount', units.length)
+      return units
+    })
+    progress.analyzeDone(analyzedUnits.length)
+
+    // 5. Classify and group into runs
+    throwIfAborted(options.signal, 'extract')
+    const runs = await tracer.startSpan(Spans.CLASSIFY, async (classifySpan) => {
+      for (const unit of analyzedUnits) {
+        unit.kind = plugin.classifyUnit(unit)
+      }
+      const buildKey = plugin.buildRunKey?.bind(plugin) ?? defaultBuildRunKey
+      const result = buildRuns(analyzedUnits, buildKey)
+      classifySpan.setAttribute(SemanticAttributes.RUN_COUNT, result.length)
+      return result
+    })
+
+    // Compute and record document complexity
+    const complexity = computeComplexity(analyzedUnits)
+    const complexityAttrs = getComplexitySpanAttributes(complexity, format)
+    span.setAttributes(complexityAttrs)
+    metrics.histogram(Metrics.DOCUMENT_COMPLEXITY_SCORE).record(complexity.score, { format })
+    metrics.histogram(Metrics.DOCUMENT_PAGE_COUNT).record(complexity.pageCount, { format })
+    logger.debug(
+      { format, complexity: complexity.score, pageCount: complexity.pageCount },
+      'Document complexity calculated',
+    )
+
+    // Record unit kind distribution
+    const kindCounts: Record<string, number> = {}
+    for (const unit of analyzedUnits) {
+      kindCounts[unit.kind] = (kindCounts[unit.kind] ?? 0) + 1
+    }
+    for (const [kind, count] of Object.entries(kindCounts)) {
+      metrics.counter(Metrics.UNIT_COUNT).add(count, { format, kind })
+    }
+
+    return {
+      format,
+      plugin: plugin as FormatPlugin<U>,
+      doc,
+      analyzedUnits,
+      runs,
+      metadata: parsed.metadata,
+    }
+  }
+
+  /**
+   * Record shared extraction metrics on the span and metrics instruments.
+   */
+  private recordExtractionMetrics(
+    span: Span,
+    obs: {
+      logger: ReturnType<typeof obsWithCorrelation>['logger']
+      metrics: ReturnType<typeof obsWithCorrelation>['metrics']
+    },
+    ctx: {
+      source: string
+      format: FormatId
+      analyzedUnits: DocumentUnit[]
+      runs: DocumentRun[]
+      text: string
+      errors: UnitError[]
+      startTime: number
+      label?: string
+    },
+  ): void {
+    const { logger, metrics } = obs
+    const { source, format, analyzedUnits, runs, text, errors, startTime, label } = ctx
+    const durationMs = Math.round(performance.now() - startTime)
+
+    span.setAttribute(SemanticAttributes.UNIT_COUNT, analyzedUnits.length)
+    span.setAttribute(SemanticAttributes.RUN_COUNT, runs.length)
+    span.setAttribute(SemanticAttributes.CHAR_COUNT, text.length)
+    span.setAttribute(SemanticAttributes.ERROR_COUNT, errors.length)
+    span.setAttribute(SemanticAttributes.DURATION_MS, durationMs)
+
+    metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'success', format })
+    metrics.counter(Metrics.RUN_COUNT).add(runs.length, { format })
+    metrics.histogram(Metrics.EXTRACTION_DURATION_MS).record(durationMs, { format })
+    metrics.histogram(Metrics.EXTRACTION_CHARS).record(text.length, { format })
+
+    const suffix = label ? ` ${label}` : ''
+    if (errors.length > 0) {
+      metrics.counter(Metrics.ERROR_COUNT).add(errors.length, { format })
+      logger.warn(
+        { source, format, errorCount: errors.length },
+        `Extraction${suffix} completed with errors`,
+      )
+    } else {
+      logger.info(
+        { source, format, unitCount: analyzedUnits.length, runCount: runs.length, durationMs },
+        `Extraction${suffix} completed`,
+      )
+    }
+  }
+
+  /**
+   * Cleanup a loaded document.
+   */
+  private async cleanupDoc(doc: LoadedDocument, plugin: FormatPlugin): Promise<void> {
+    if (plugin.cleanup) {
+      try {
+        await plugin.cleanup(doc)
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
 
   /**
    * Analyze all units, collecting errors for failed units.
@@ -956,7 +1004,7 @@ export class PipelineProcessor {
           texts.push(result.value)
         } else {
           // Re-throw AbortError - don't treat it as a recoverable error
-          if (result.reason instanceof AbortError) {
+          if (isAbortError(result.reason)) {
             throw result.reason
           }
 
@@ -988,7 +1036,7 @@ export class PipelineProcessor {
           texts.push(text)
         } catch (err) {
           // Always re-throw AbortError
-          if (err instanceof AbortError) {
+          if (isAbortError(err)) {
             throw err
           }
 
@@ -1104,7 +1152,7 @@ export class PipelineProcessor {
           progress.extractUnit(unit.index, totalUnits, result.value.charCount)
         } else {
           // Re-throw AbortError - don't treat it as a recoverable error
-          if (result.reason instanceof AbortError) {
+          if (isAbortError(result.reason)) {
             throw result.reason
           }
 
@@ -1134,55 +1182,54 @@ export class PipelineProcessor {
       }
 
       return extractedUnits
-    } else {
-      // Sequential extraction
-      const extractedUnits: ExtractedUnit[] = []
-
-      for (const unit of allUnits) {
-        throwIfAborted(options.signal, 'extract')
-
-        try {
-          const result = await plugin.extractUnit(unit, doc, options as Record<string, unknown>)
-          extractedUnits.push({
-            index: unit.index,
-            label: unit.label,
-            text: result.text,
-            kind: unit.kind,
-            language: unit.language,
-          })
-          progress.extractUnit(unit.index, totalUnits, result.charCount)
-        } catch (err) {
-          if (err instanceof AbortError) {
-            throw err
-          }
-
-          if (options.strict) {
-            throw err
-          }
-
-          // Collect error but continue
-          const error: UnitError = {
-            unitIndex: unit.index,
-            phase: 'extract',
-            message: err instanceof Error ? err.message : String(err),
-            cause: err instanceof Error ? err : undefined,
-          }
-          errors.push(error)
-          progress.error('extract', error, unit.index)
-
-          // Add unit with empty text
-          extractedUnits.push({
-            index: unit.index,
-            label: unit.label,
-            text: '',
-            kind: unit.kind,
-            language: unit.language,
-          })
-        }
-      }
-
-      return extractedUnits
     }
+    // Sequential extraction
+    const extractedUnits: ExtractedUnit[] = []
+
+    for (const unit of allUnits) {
+      throwIfAborted(options.signal, 'extract')
+
+      try {
+        const result = await plugin.extractUnit(unit, doc, options as Record<string, unknown>)
+        extractedUnits.push({
+          index: unit.index,
+          label: unit.label,
+          text: result.text,
+          kind: unit.kind,
+          language: unit.language,
+        })
+        progress.extractUnit(unit.index, totalUnits, result.charCount)
+      } catch (err) {
+        if (isAbortError(err)) {
+          throw err
+        }
+
+        if (options.strict) {
+          throw err
+        }
+
+        // Collect error but continue
+        const error: UnitError = {
+          unitIndex: unit.index,
+          phase: 'extract',
+          message: err instanceof Error ? err.message : String(err),
+          cause: err instanceof Error ? err : undefined,
+        }
+        errors.push(error)
+        progress.error('extract', error, unit.index)
+
+        // Add unit with empty text
+        extractedUnits.push({
+          index: unit.index,
+          label: unit.label,
+          text: '',
+          kind: unit.kind,
+          language: unit.language,
+        })
+      }
+    }
+
+    return extractedUnits
   }
 }
 
@@ -1234,4 +1281,21 @@ export async function extractUnits(
 ): Promise<ExtractUnitsResult> {
   const processor = new PipelineProcessor()
   return processor.extractUnits(input, options)
+}
+
+// ============================================================================
+// URL Helpers
+// ============================================================================
+
+/**
+ * Check if a DocumentInput is an HTTP(S) URL.
+ */
+function isHttpUrl(input: DocumentInput): boolean {
+  if (typeof input === 'string') {
+    return input.startsWith('http://') || input.startsWith('https://')
+  }
+  if (input instanceof URL) {
+    return input.protocol === 'http:' || input.protocol === 'https:'
+  }
+  return false
 }

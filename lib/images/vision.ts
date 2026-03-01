@@ -19,9 +19,10 @@ import { calculateEntryCost, createJournalEntry } from '../ai/journal.js'
 import { getProvider } from '../ai/provider.js'
 import { buildProviderOptions } from '../ai/providerOptions.js'
 import { resolveModel as resolveModelFull } from '../ai/resolve.js'
-import type { ImageContext, JournalCallback } from '../ai/types.js'
-import { obs, SemanticMetrics } from '../observability/index.js'
-import { SpanNames } from '../observability/types.js'
+import type { JournalCallback } from '../ai/types.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
+import type { ImageContext } from '../pipeline/types.js'
+import { Metrics, Spans } from './signals.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -253,7 +254,7 @@ function getModelPricing(modelId: string): { providerName: string; pricing: Mode
 export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionResult> {
   const { tracer, metrics } = obs('images')
 
-  return tracer.startSpan(SpanNames.IMAGES_ANALYZE, async (span) => {
+  return tracer.startSpan(Spans.ANALYZE, async (span) => {
     const {
       imageData,
       mimeType,
@@ -270,7 +271,7 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
       providerOptions,
     } = opts
 
-    span.setAttribute('streaming', false)
+    span.setAttribute(SemanticAttributes.STREAMING, false)
     span.setAttribute('mimeType', mimeType)
     if (filePath) span.setAttribute('filePath', filePath)
     if (extractedText) span.setAttribute('hasExtractedText', true)
@@ -278,9 +279,7 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
 
     // Validate inputs
     if (!imageData) {
-      metrics
-        .counter(SemanticMetrics.IMAGES_ANALYSES_COUNT)
-        .add(1, { status: 'failure', streaming: 'false' })
+      metrics.counter(Metrics.ANALYSIS_COUNT).add(1, { status: 'failure', streaming: 'false' })
       return { ok: false, error: 'Image data is required', code: 'INVALID_INPUT' }
     }
 
@@ -320,10 +319,8 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
       const truncated = fullText.length > maxOutputChars
 
       // Record metrics
-      metrics
-        .counter(SemanticMetrics.IMAGES_ANALYSES_COUNT)
-        .add(1, { status: 'success', streaming: 'false' })
-      metrics.histogram(SemanticMetrics.IMAGES_ANALYSIS_DURATION_MS).record(durationMs)
+      metrics.counter(Metrics.ANALYSIS_COUNT).add(1, { status: 'success', streaming: 'false' })
+      metrics.histogram(Metrics.ANALYSIS_DURATION_MS).record(durationMs)
 
       // Journal the LLM call if experiment is enabled
       if (experiment && onJournal) {
@@ -397,9 +394,7 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
       const message = err instanceof Error ? err.message : 'Unknown error'
       span.recordException(err instanceof Error ? err : new Error(message))
       span.setError(message)
-      metrics
-        .counter(SemanticMetrics.IMAGES_ANALYSES_COUNT)
-        .add(1, { status: 'failure', streaming: 'false' })
+      metrics.counter(Metrics.ANALYSIS_COUNT).add(1, { status: 'failure', streaming: 'false' })
 
       if (message.includes('timed out')) {
         return { ok: false, error: message, code: 'TIMEOUT' }
@@ -474,10 +469,8 @@ export async function* analyzeImageStreaming(
 
   // Record metrics after stream completes
   const durationMs = Math.round(performance.now() - startTime)
-  metrics
-    .counter(SemanticMetrics.IMAGES_ANALYSES_COUNT)
-    .add(1, { status: 'success', streaming: 'true' })
-  metrics.histogram(SemanticMetrics.IMAGES_ANALYSIS_DURATION_MS).record(durationMs)
+  metrics.counter(Metrics.ANALYSIS_COUNT).add(1, { status: 'success', streaming: 'true' })
+  metrics.histogram(Metrics.ANALYSIS_DURATION_MS).record(durationMs)
 
   // Journal after stream completes if experiment is enabled
   if (experiment && onJournal) {

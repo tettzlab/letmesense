@@ -7,16 +7,18 @@ import { EventEmitter } from 'node:events'
 import { mkdir, rm } from 'node:fs/promises'
 import { cpus, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DEFAULT_PAGE_TIMEOUT_MS } from '../../common/timeouts.js'
 import { obs } from '../../observability/index.js'
-import { LATENCY_BOUNDARIES, SemanticMetrics } from '../../observability/types.js'
+import { LATENCY_BOUNDARIES } from '../../observability/types.js'
 import { OfficeConvertError } from '../errors.js'
+import { Metrics } from '../signals.js'
 import { checkLibreOffice, convertWithProfile } from './libreoffice.js'
 import type { ConversionJob, ConversionResult, PoolOptions, PoolStats } from './types.js'
 
 /** Default pool options */
 const DEFAULT_POOL_OPTIONS: Required<PoolOptions> = {
   poolSize: 4,
-  timeout: 60000,
+  timeout: DEFAULT_PAGE_TIMEOUT_MS,
   profileBaseDir: join(tmpdir(), 'letmesense-office-pool'),
 }
 
@@ -133,8 +135,8 @@ export class LibreOfficePool extends EventEmitter {
    */
   private updateMetrics(): void {
     const { metrics } = this.obs
-    metrics.gauge(SemanticMetrics.LIBREOFFICE_POOL_ACTIVE).set(this.activeWorkers)
-    metrics.gauge(SemanticMetrics.LIBREOFFICE_POOL_QUEUE_DEPTH).set(this.queue.length)
+    metrics.gauge(Metrics.LIBREOFFICE_POOL_ACTIVE).set(this.activeWorkers)
+    metrics.gauge(Metrics.LIBREOFFICE_POOL_QUEUE_DEPTH).set(this.queue.length)
   }
 
   /**
@@ -172,11 +174,9 @@ export class LibreOfficePool extends EventEmitter {
       this.totalDuration += result.duration
 
       // Record metrics
+      metrics.counter(Metrics.LIBREOFFICE_POOL_JOB_COUNT).add(1, { status: 'success' })
       metrics
-        .counter(SemanticMetrics.LIBREOFFICE_POOL_JOBS_TOTAL_COUNT)
-        .add(1, { status: 'success' })
-      metrics
-        .histogram(SemanticMetrics.LIBREOFFICE_POOL_JOB_DURATION_MS, {
+        .histogram(Metrics.LIBREOFFICE_POOL_JOB_DURATION_MS, {
           boundaries: LATENCY_BOUNDARIES,
         })
         .record(result.duration)
@@ -193,7 +193,7 @@ export class LibreOfficePool extends EventEmitter {
         duration: result.duration,
       })
     } catch (err) {
-      metrics.counter(SemanticMetrics.LIBREOFFICE_POOL_JOBS_TOTAL_COUNT).add(1, { status: 'error' })
+      metrics.counter(Metrics.LIBREOFFICE_POOL_JOB_COUNT).add(1, { status: 'error' })
       logger.error({ inputPath: job.inputPath, workerIndex, err }, 'Pool job failed')
 
       job.reject(err instanceof Error ? err : new Error(String(err)))

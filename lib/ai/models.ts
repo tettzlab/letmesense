@@ -5,8 +5,9 @@
  * This module provides typed interfaces and lookup helpers.
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import type { LanguageModel } from 'ai'
 
 /** Supported AI provider identifiers */
 export type ProviderId = 'openai' | 'anthropic' | 'google' | 'ollama'
@@ -93,6 +94,14 @@ export interface ProviderConfig {
   defaultVisionModel: string
 }
 
+/** Configuration for explicit model registry initialization. */
+export interface ModelRegistryInit {
+  /** Raw JSON string for the model registry. Takes priority over `file`. */
+  json?: string
+  /** Path to a models.json file. */
+  file?: string
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // JSON Loading
 // ─────────────────────────────────────────────────────────────────────────────
@@ -175,44 +184,156 @@ function validateModelsJson(data: unknown): asserts data is ModelsJson {
   }
 }
 
-function loadModelsJson(): ModelsJson {
-  const jsonPath = resolve(import.meta.dirname, '../../models.json')
-  const raw = JSON.parse(readFileSync(jsonPath, 'utf-8'))
-  validateModelsJson(raw)
-  return raw
-}
-
-const loaded = loadModelsJson()
+let _pendingConfig: ModelRegistryInit | null = null
 
 /**
- * Centralized model registry.
- * Single source of truth for all supported models.
+ * Explicitly configure how the model registry loads its data.
+ *
+ * Must be called **before** the first registry access (e.g. `getModelRegistry()`).
+ * No-ops silently if the registry is already loaded or pending configuration.
+ *
+ * Priority chain when the registry loads:
+ * 1. `initModelRegistry({ json })` — explicit JSON string
+ * 2. `initModelRegistry({ file })` — explicit file path
+ * 3. `process.env.MODELS_JSON` — env var fallback
+ * 4. `process.env.MODELS_FILE` — env var fallback
+ * 5. `./models.json` — hardcoded default
  */
-export const MODEL_REGISTRY: readonly ModelConfig[] = loaded.models
+export function initModelRegistry(config: ModelRegistryInit): void {
+  if (_cache) {
+    console.debug('[ai] initModelRegistry() called after registry already loaded — ignored.')
+    return
+  }
+  if (_pendingConfig) {
+    console.debug('[ai] initModelRegistry() called twice before registry load — ignored.')
+    return
+  }
+  _pendingConfig = config
+}
+
+/**
+ * Returns true if the registry has been loaded or is pending configuration.
+ * Useful for callers that want to avoid redundant `initModelRegistry()` calls.
+ */
+export function isRegistryConfigured(): boolean {
+  return _cache !== null || _pendingConfig !== null
+}
+
+function loadModelsJson(): ModelsJson {
+  // Priority: pending config > env vars > default file
+  let modelsJsonRaw = ''
+  const searchedPaths: string[] = []
+
+  if (_pendingConfig?.json) {
+    modelsJsonRaw = _pendingConfig.json.trim()
+  }
+
+  if (!modelsJsonRaw && _pendingConfig?.file) {
+    const filePath = resolve(process.cwd(), _pendingConfig.file)
+    searchedPaths.push(filePath)
+    if (existsSync(filePath)) {
+      modelsJsonRaw = readFileSync(filePath, 'utf-8')
+    }
+  }
+
+  if (!modelsJsonRaw) {
+    const envJson = (process.env.MODELS_JSON ?? '').trim()
+    if (envJson) {
+      modelsJsonRaw = envJson
+    }
+  }
+
+  if (!modelsJsonRaw) {
+    const envFile = process.env.MODELS_FILE
+    if (envFile) {
+      const filePath = resolve(process.cwd(), envFile)
+      searchedPaths.push(filePath)
+      if (existsSync(filePath)) {
+        modelsJsonRaw = readFileSync(filePath, 'utf-8')
+      }
+    }
+  }
+
+  if (!modelsJsonRaw) {
+    const defaultPath = resolve(process.cwd(), './models.json')
+    searchedPaths.push(defaultPath)
+    if (existsSync(defaultPath)) {
+      modelsJsonRaw = readFileSync(defaultPath, 'utf-8')
+    }
+  }
+
+  if (!modelsJsonRaw) {
+    const searched =
+      searchedPaths.length > 0
+        ? searchedPaths.map((p) => `  - ${p}`).join('\n')
+        : '  (no path configured)'
+    throw new Error(`models.json not found. Searched:\n${searched}`)
+  }
+
+  const modelsJson = JSON.parse(modelsJsonRaw)
+  validateModelsJson(modelsJson)
+  return modelsJson
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Provider Registry
+// Lazy singleton — loadModelsJson() runs on first use, not on import
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const PROVIDER_REGISTRY: readonly ProviderConfig[] = loaded.providers
+let _cache: ModelsJson | null = null
 
-/** Default provider from models.json */
-export const DEFAULT_PROVIDER: ProviderId = loaded.defaultProvider
+function getLoadedModels(): ModelsJson {
+  if (!_cache) {
+    _cache = loadModelsJson()
+  }
+  return _cache
+}
+
+const _resetCallbacks: Array<() => void> = []
+
+/** Register a callback to run when the registry is reset. Used by downstream caches. */
+export function _onRegistryReset(cb: () => void): void {
+  _resetCallbacks.push(cb)
+}
+
+/** Reset the cached registry (for tests only). Also clears dependent caches. */
+export function _resetRegistryCache(): void {
+  _cache = null
+  _pendingConfig = null
+  for (const cb of _resetCallbacks) cb()
+}
+
+/** Get the centralized model registry. */
+export function getModelRegistry(): readonly ModelConfig[] {
+  return getLoadedModels().models
+}
+
+/** Get the provider registry. */
+export function getProviderRegistry(): readonly ProviderConfig[] {
+  return getLoadedModels().providers
+}
+
+/** Get the default provider from models.json. */
+export function getDefaultProvider(): ProviderId {
+  return getLoadedModels().defaultProvider
+}
 
 /** Lookup provider config by ID. Throws if not found. */
 export function getProviderConfig(id: ProviderId): ProviderConfig {
-  const cfg = PROVIDER_REGISTRY.find((p) => p.id === id)
+  const cfg = getProviderRegistry().find((p) => p.id === id)
   if (!cfg) {
     throw new Error(`Unknown provider: ${id}`)
   }
   return cfg
 }
 
-/** Get pricing for a model. Returns zeros for unknown models. */
+/** Default pricing for unknown models — conservative estimate to avoid masking spend */
+const DEFAULT_PRICING: ModelPricing = { input: 1.0, output: 4.0, image: 0.5 }
+
+/** Get pricing for a model. Returns conservative defaults for unknown models. */
 export function getModelPricing(modelId: string): ModelPricing {
   const model = getModel(modelId)
   if (model?.pricing) return model.pricing
-  return { input: 0, output: 0, image: null }
+  return DEFAULT_PRICING
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,7 +342,7 @@ export function getModelPricing(modelId: string): ModelPricing {
 
 /** Lookup model by ID. Returns undefined if not found. */
 export function getModel(modelId: string): ModelConfig | undefined {
-  return MODEL_REGISTRY.find((m) => m.id === modelId)
+  return getModelRegistry().find((m) => m.id === modelId)
 }
 
 /** Lookup model by ID, throw if not found. */
@@ -235,12 +356,12 @@ export function getModelOrThrow(modelId: string): ModelConfig {
 
 /** Get all models for a provider. */
 export function getModelsByProvider(provider: ProviderId): ModelConfig[] {
-  return MODEL_REGISTRY.filter((m) => m.provider === provider)
+  return getModelRegistry().filter((m) => m.provider === provider)
 }
 
 /** Resolve alias to model ID. Returns input if not an alias. */
 export function resolveModelAlias(provider: ProviderId, aliasOrId: string): string {
-  const model = MODEL_REGISTRY.find(
+  const model = getModelRegistry().find(
     (m) => m.provider === provider && m.aliases?.includes(aliasOrId),
   )
   return model?.id ?? aliasOrId
@@ -261,4 +382,11 @@ export function getDefaultEncoding(provider: ProviderId): TokenizerEncoding {
   const cfg = getProviderConfig(provider)
   const model = getModel(cfg.defaultModel)
   return model?.encoding ?? 'o200k_base'
+}
+
+/** Extract a model identifier string for observability purposes. */
+export function getModelIdentifier(model: LanguageModel): string {
+  if (typeof model === 'string') return model
+  if ('modelId' in model && typeof model.modelId === 'string') return model.modelId
+  return 'unknown'
 }

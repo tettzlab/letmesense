@@ -10,8 +10,8 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { LanguageModel } from 'ai'
 import sharp from 'sharp'
-import { obs, SemanticMetrics } from '../observability/index.js'
-import { SpanNames } from '../observability/types.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
+import { Metrics, Spans } from './signals.js'
 import { analyzeImage } from './vision.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -366,21 +366,21 @@ export async function runViewImage(
 ): Promise<ViewImageResult> {
   const { tracer, metrics, logger } = obs('image.view')
 
-  return tracer.startSpan(SpanNames.IMAGE_VIEW, async (span) => {
+  return tracer.startSpan(Spans.VIEW, async (span) => {
     const start = performance.now()
     span.setAttribute('filePath', options.filePath)
 
     // Validate file
     const validation = await validateImageFile(resolvedPath)
     if (!validation.ok) {
-      span.setAttribute('status', 'error')
+      span.setAttribute(SemanticAttributes.STATUS, 'error')
       span.setAttribute('errorCode', validation.code ?? 'unknown')
-      metrics.counter(SemanticMetrics.IMAGE_LOAD_COUNT).add(1, { status: 'error' })
+      metrics.counter(Metrics.LOAD_COUNT).add(1, { status: 'error' })
       return validation
     }
 
     const { bytes } = validation
-    span.setAttribute('bytes', bytes)
+    span.setAttribute(SemanticAttributes.BYTES, bytes)
 
     // Detect format
     const formatOption = options.format ?? 'auto'
@@ -388,9 +388,9 @@ export async function runViewImage(
 
     if (!format) {
       const ext = path.extname(options.filePath)
-      span.setAttribute('status', 'error')
+      span.setAttribute(SemanticAttributes.STATUS, 'error')
       span.setAttribute('errorCode', 'UNKNOWN_FORMAT')
-      metrics.counter(SemanticMetrics.IMAGE_LOAD_COUNT).add(1, { status: 'error' })
+      metrics.counter(Metrics.LOAD_COUNT).add(1, { status: 'error' })
       return {
         ok: false,
         error: `Unknown image format: ${ext || '(no extension)'}`,
@@ -398,7 +398,7 @@ export async function runViewImage(
       }
     }
 
-    span.setAttribute('format', format)
+    span.setAttribute(SemanticAttributes.FORMAT, format)
 
     // Process based on format with timeout
     const timeoutPromise = new Promise<ViewImageError>((resolve) => {
@@ -417,23 +417,23 @@ export async function runViewImage(
     // Record metrics
     const durationMs = performance.now() - start
     if (result.ok) {
-      span.setAttribute('status', 'success')
-      span.setAttribute('width', result.width)
-      span.setAttribute('height', result.height)
+      span.setAttribute(SemanticAttributes.STATUS, 'success')
+      span.setAttribute(SemanticAttributes.WIDTH, result.width)
+      span.setAttribute(SemanticAttributes.HEIGHT, result.height)
       span.setAttribute('resized', result.resized)
-      metrics.counter(SemanticMetrics.IMAGE_LOAD_COUNT).add(1, { status: 'success', format })
-      metrics.histogram(SemanticMetrics.IMAGE_LOAD_BYTES).record(bytes, { format })
-      metrics.histogram(SemanticMetrics.IMAGE_PROCESS_DURATION_MS).record(durationMs, { format })
+      metrics.counter(Metrics.LOAD_COUNT).add(1, { status: 'success', format })
+      metrics.histogram(Metrics.LOAD_BYTES).record(bytes, { format })
+      metrics.histogram(Metrics.PROCESS_DURATION_MS).record(durationMs, { format })
       if (result.resized) {
-        metrics.counter(SemanticMetrics.IMAGE_RESIZE_COUNT).add(1, { format })
+        metrics.counter(Metrics.RESIZE_COUNT).add(1, { format })
       }
       logger.debug(
         { format, bytes, width: result.width, height: result.height, durationMs },
         'Image processed',
       )
     } else {
-      span.setAttribute('status', 'error')
-      metrics.counter(SemanticMetrics.IMAGE_LOAD_COUNT).add(1, { status: 'error', format })
+      span.setAttribute(SemanticAttributes.STATUS, 'error')
+      metrics.counter(Metrics.LOAD_COUNT).add(1, { status: 'error', format })
     }
 
     // If analyze mode and we have base64 data, run vision analysis

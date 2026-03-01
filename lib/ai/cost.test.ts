@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+// Register all providers
+import { registerAllProviders } from './bootstrap.js'
 import {
   calculateCost,
   estimateCost,
@@ -7,9 +8,6 @@ import {
   formatCostEstimate,
   formatCostWarning,
 } from './cost.js'
-
-// Register all providers
-import { registerAllProviders } from './providers.js'
 
 registerAllProviders()
 

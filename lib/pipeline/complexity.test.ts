@@ -1,30 +1,10 @@
-/**
- * Tests for document complexity metrics module.
- */
-
-import { describe, expect, it } from 'vitest'
+import { createUnit } from '../testing/index.js'
 import {
   computeComplexity,
   type DocumentComplexity,
   getComplexityLevel,
   getComplexitySpanAttributes,
 } from './complexity.js'
-import type { DocumentUnit } from './types.js'
-
-/**
- * Helper to create a mock DocumentUnit with defaults
- */
-function createUnit(overrides: Partial<DocumentUnit> = {}): DocumentUnit {
-  return {
-    index: 0,
-    label: 'Page 1',
-    kind: 'text-only',
-    charCount: 1000,
-    language: 'eng',
-    textSample: 'Sample text...',
-    ...overrides,
-  }
-}
 
 describe('computeComplexity', () => {
   describe('pageCount', () => {

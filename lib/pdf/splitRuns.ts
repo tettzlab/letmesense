@@ -1,8 +1,10 @@
 import { obs } from '../observability/index.js'
-import { SpanNames } from '../observability/types.js'
+import { SemanticAttributes } from '../observability/types.js'
+import { throwIfAborted } from '../pipeline/errors.js'
 import { analyzePage } from './analyzePage.js'
 import { loadPdfDocumentFromBytes } from './pdfjs.js'
 import { cleanupPdfDocument } from './pdfjsTypes.js'
+import { Spans } from './signals.js'
 import type { PageAttributes, ProgressCallbacks, SplitPdfOptions, SplitRun } from './types.js'
 
 export interface SplitRunsOptions extends SplitPdfOptions {
@@ -20,13 +22,13 @@ export async function splitIntoRuns(
 ): Promise<{ runs: SplitRun[]; pages: PageAttributes[] }> {
   const { tracer } = obs('pdf')
 
-  return tracer.startSpan(SpanNames.PDF_SPLIT, async (span) => {
+  return tracer.startSpan(Spans.SPLIT, async (span) => {
     const includePdfBytes = options.includePdfBytes ?? true
     const { progress } = options
 
     // Copy bytes because pdfjs detaches the underlying ArrayBuffer
     const pdf = await loadPdfDocumentFromBytes(new Uint8Array(pdfBytes))
-    span.setAttribute('pageCount', pdf.numPages)
+    span.setAttribute(SemanticAttributes.PAGE_COUNT, pdf.numPages)
 
     // Analyze pages with pdfjs, then clean up BEFORE loading pdf-lib
     // This reduces peak memory by not holding both documents simultaneously
@@ -34,6 +36,7 @@ export async function splitIntoRuns(
     try {
       pages = []
       for (let i = 0; i < pdf.numPages; i++) {
+        throwIfAborted(options.signal, 'split')
         try {
           const page = await pdf.getPage(i + 1)
           pages.push(await analyzePage(page, i, options))
@@ -55,7 +58,7 @@ export async function splitIntoRuns(
             imageOpCount: 0,
             language: 'und',
             error: {
-              pageIndex: i,
+              unitIndex: i,
               phase: 'analyze',
               message: err instanceof Error ? err.message : String(err),
               cause: err instanceof Error ? err : undefined,
@@ -87,7 +90,7 @@ export async function splitIntoRuns(
       }
     }
 
-    span.setAttribute('runCount', runs.length)
+    span.setAttribute(SemanticAttributes.RUN_COUNT, runs.length)
 
     // Extract PDF bytes for each run using pdf-lib (pdfjs already cleaned up)
     // Dynamic import to defer loading pdf-lib until needed

@@ -1,4 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LlmProvider, ModelPricing, StreamEvent } from './types.js'
 
 // Create a mock provider
@@ -55,6 +54,10 @@ import {
 } from './format.js'
 import type { LlmFormatOptions } from './types.js'
 
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
 const createPageInput = (overrides?: Partial<PageInput>): PageInput => ({
   text: 'Sample text content',
   pageIndex: 0,
@@ -76,10 +79,6 @@ describe('DEFAULT_MARKDOWN_PAGE_SEPARATOR', () => {
 })
 
 describe('estimateFormatCost', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   it('estimates cost for pages', () => {
     const pages = [createPageInput(), createPageInput({ pageIndex: 1 })]
     const options = createOptions()
@@ -103,7 +102,6 @@ describe('estimateFormatCost', () => {
 
 describe('formatPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     vi.mocked(mockProvider.format).mockResolvedValue({
       content: 'Formatted markdown',
       usage: { inputTokens: 100, outputTokens: 50 },
@@ -200,7 +198,6 @@ describe('formatPage', () => {
 
 describe('formatPageStream', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     vi.mocked(mockProvider.formatStream).mockResolvedValue({
       content: 'Streamed content',
       usage: { inputTokens: 100, outputTokens: 50 },
@@ -227,7 +224,6 @@ describe('formatPageStream', () => {
 
 describe('formatPages', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     vi.mocked(mockProvider.format).mockResolvedValue({
       content: 'Formatted page',
       usage: { inputTokens: 100, outputTokens: 50 },
@@ -350,7 +346,6 @@ describe('formatPages', () => {
 
 describe('formatAsMarkdown', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     vi.mocked(mockProvider.format).mockResolvedValue({
       content: 'Markdown output',
       usage: { inputTokens: 100, outputTokens: 50 },

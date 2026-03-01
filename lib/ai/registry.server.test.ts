@@ -1,5 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
 // Use vi.hoisted to ensure mockLogger is available during mock setup
 const mockLogger = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -60,11 +58,11 @@ describe('registry.languageModel', () => {
     })
 
     it('creates Anthropic model from spec', () => {
-      const model = registry.languageModel('anthropic:claude-opus-4-5')
+      const model = registry.languageModel('anthropic:claude-opus-4-6')
 
-      expect(anthropic).toHaveBeenCalledWith('claude-opus-4-5')
+      expect(anthropic).toHaveBeenCalledWith('claude-opus-4-6')
       expect(model).toHaveProperty('_type', 'anthropic')
-      expect(model).toHaveProperty('modelId', 'claude-opus-4-5')
+      expect(model).toHaveProperty('modelId', 'claude-opus-4-6')
     })
 
     it('creates Google model from spec', () => {
@@ -80,8 +78,8 @@ describe('registry.languageModel', () => {
     it('resolves anthropic:sonnet alias', () => {
       const model = registry.languageModel('anthropic:sonnet')
 
-      expect(anthropic).toHaveBeenCalledWith('claude-sonnet-4-5')
-      expect(model).toHaveProperty('modelId', 'claude-sonnet-4-5')
+      expect(anthropic).toHaveBeenCalledWith('claude-sonnet-4-6')
+      expect(model).toHaveProperty('modelId', 'claude-sonnet-4-6')
     })
 
     it('resolves openai:nano alias', () => {
@@ -143,9 +141,9 @@ describe('barrel exports', () => {
   it('exports all values from index.server.js', async () => {
     const exports = await import('./index.server.js')
 
-    expect(exports.PROVIDERS).toBeDefined()
-    expect(exports.MODELS).toBeDefined()
-    expect(exports.DEFAULT_PROVIDER).toBeDefined()
+    expect(exports.getProviders).toBeDefined()
+    expect(exports.getModels).toBeDefined()
+    expect(exports.getDefaultProvider).toBeDefined()
     expect(exports.parseModelSpec).toBeDefined()
     expect(exports.createModel).toBeDefined()
     expect(exports.registry).toBeDefined()

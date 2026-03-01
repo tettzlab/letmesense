@@ -10,7 +10,7 @@ export type Orientation = 'portrait' | 'landscape'
  * Present on PageAttributes when a page fails to analyze.
  */
 export interface PageError {
-  pageIndex: number
+  unitIndex: number
   phase: 'analyze' | 'extract' | 'ocr'
   message: string
   cause?: Error
@@ -60,6 +60,8 @@ export interface SplitRun {
 
 export interface SplitPdfOptions extends AnalyzePageOptions {
   includePdfBytes?: boolean
+  /** AbortSignal for cancellation */
+  signal?: AbortSignal
 }
 
 export interface ExtractTextOptions {
@@ -75,13 +77,16 @@ export interface ExtractTextOptions {
   // Timeout
   /** Per-page timeout in milliseconds. 0 to disable. Default: 60000 (1 minute) */
   pageTimeout?: number
+
+  /** AbortSignal for cancellation */
+  signal?: AbortSignal
 }
 
 /**
  * Error that occurred during text extraction from a specific page.
  */
 export interface ExtractionError {
-  pageIndex: number
+  unitIndex: number
   phase: 'extract' | 'ocr'
   message: string
 }
@@ -90,7 +95,7 @@ export interface ExtractionError {
  * Result from extracting text from a homogeneous PDF.
  * Includes both the extracted text and any errors that occurred.
  */
-export interface ExtractionResult {
+export interface PdfTextResult {
   text: string
   pageCount: number
   errors: ExtractionError[]

@@ -3,7 +3,7 @@
  */
 
 import { obs } from '../../observability/index.js'
-import { SemanticMetrics } from '../../observability/types.js'
+import { Metrics } from '../signals.js'
 
 export { csvFormatter, formatAsCsv, formatSheetAsCsv } from './csv.js'
 export { formatAsJson, formatSheetAsJson, jsonFormatter } from './json.js'
@@ -55,8 +55,8 @@ export function formatResult(
   const output = formatter.format(result, options)
 
   const durationMs = performance.now() - start
-  metrics.counter(SemanticMetrics.OFFICE_FORMAT_COUNT).add(1, { format })
-  metrics.histogram(SemanticMetrics.OFFICE_FORMAT_DURATION_MS).record(durationMs, { format })
+  metrics.counter(Metrics.FORMAT_COUNT).add(1, { format })
+  metrics.histogram(Metrics.FORMAT_DURATION_MS).record(durationMs, { format })
 
   return output
 }

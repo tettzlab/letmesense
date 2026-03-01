@@ -1,11 +1,12 @@
 import { franc } from 'franc'
 
 import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { SemanticAttributes } from '../observability/types.js'
 import { classifyPageKind } from './classify.js'
 import { estimateImageCoverageFromPage } from './imageCoverage.js'
 import type { PDFPageProxy } from './pdfjs.js'
 import { getPageTextContent, getSafePageView } from './pdfjsTypes.js'
+import { Metrics, Spans } from './signals.js'
 import { textItemsToString } from './text.js'
 import type { AnalyzePageOptions, PageAttributes } from './types.js'
 
@@ -50,7 +51,7 @@ export async function analyzePage(
 ): Promise<PageAttributes> {
   const { tracer, metrics } = obs('pdf.analyze')
 
-  return tracer.startSpan(SpanNames.PDF_ANALYZE_PAGE, async (span) => {
+  return tracer.startSpan(Spans.ANALYZE_PAGE, async (span) => {
     span.setAttribute('pageIndex', pageIndex)
 
     const cfg = { ...DEFAULTS, ...options }
@@ -98,10 +99,10 @@ export async function analyzePage(
 
     span.setAttribute('kind', kind)
     span.setAttribute('orientation', orientation)
-    span.setAttribute('charCount', charCount)
-    span.setAttribute('language', language)
+    span.setAttribute(SemanticAttributes.CHAR_COUNT, charCount)
+    span.setAttribute(SemanticAttributes.LANGUAGE, language)
     span.setAttribute('imageCount', coverage.images.length)
-    metrics.counter(SemanticMetrics.PDF_PAGES_ANALYZED_COUNT).add(1, { kind })
+    metrics.counter(Metrics.PAGE_ANALYZED_COUNT).add(1, { kind })
 
     return {
       pageIndex,

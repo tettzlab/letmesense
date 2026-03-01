@@ -5,15 +5,9 @@
  */
 
 import { obs } from '../observability/index.js'
-// Import for internal use
-import {
-  buildPromptForExtraction as _buildPromptForExtraction,
-  composePrompt as _composePrompt,
-  determineDocumentType as _determineDocumentType,
-} from '../pipeline/prompts.js'
 import type { PageContext } from './types.js'
 
-// Re-export composition framework from pipeline for backwards compatibility
+// Re-export composition framework from pipeline (canonical location)
 export {
   buildPromptForExtraction,
   composePrompt,
@@ -21,7 +15,9 @@ export {
   determineDocumentType,
   determineTextReliability,
   type ExtractionMode,
+  PROMPTS,
   type PromptOptions,
+  type PromptPreset,
   // Pre-built prompts
   TEXT_ONLY_DIGITAL_PDF,
   TEXT_ONLY_OCR_HIGH_PDF,
@@ -40,45 +36,20 @@ export {
 } from '../pipeline/prompts.js'
 
 // ============================================================================
-// Legacy Prompt Constants
+// Primary Prompt Constants (used by ai/format.ts and office/vision/processor.ts)
 // ============================================================================
 
-/** Import pre-built prompts for local use and legacy aliases */
 import {
   VISION_DIGITAL_PDF as DEFAULT_VISION_PROMPT_INTERNAL,
-  VISION_DOCX as DOCX_PROMPT_INTERNAL,
-  VISION_NO_TEXT_PDF as IMAGE_ONLY_PROMPT_INTERNAL,
-  VISION_IMAGE as IMAGE_VISION_PROMPT_INTERNAL,
-  VISION_OCR_HIGH_PDF as OCR_HIGH_CONFIDENCE_PROMPT_INTERNAL,
-  VISION_OCR_LOW_PDF as OCR_LOW_CONFIDENCE_PROMPT_INTERNAL,
-  VISION_OCR_MEDIUM_PDF as OCR_MEDIUM_CONFIDENCE_PROMPT_INTERNAL,
-  VISION_PPTX as PPTX_PROMPT_INTERNAL,
-  TEXT_ONLY_OCR_HIGH_PDF as TEXT_ONLY_OCR_HIGH_PROMPT_INTERNAL,
-  TEXT_ONLY_OCR_LOW_PDF as TEXT_ONLY_OCR_LOW_PROMPT_INTERNAL,
-  TEXT_ONLY_OCR_MEDIUM_PDF as TEXT_ONLY_OCR_MEDIUM_PROMPT_INTERNAL,
   TEXT_ONLY_DIGITAL_PDF as TEXT_ONLY_PROMPT_INTERNAL,
-  VISION_XLSX as XLSX_PROMPT_INTERNAL,
 } from '../pipeline/prompts.js'
 
-// Legacy aliases - now generated from composition framework
 /**
  * Default text-only formatting prompt.
  * Generated from: mode='text-only', textReliability='digital', documentType='pdf'
  */
 export const DEFAULT_TEXT_PROMPT = TEXT_ONLY_PROMPT_INTERNAL
 export const DEFAULT_VISION_PROMPT = DEFAULT_VISION_PROMPT_INTERNAL
-export const OCR_HIGH_CONFIDENCE_PROMPT = OCR_HIGH_CONFIDENCE_PROMPT_INTERNAL
-export const OCR_MEDIUM_CONFIDENCE_PROMPT = OCR_MEDIUM_CONFIDENCE_PROMPT_INTERNAL
-export const OCR_LOW_CONFIDENCE_PROMPT = OCR_LOW_CONFIDENCE_PROMPT_INTERNAL
-export const IMAGE_ONLY_PROMPT = IMAGE_ONLY_PROMPT_INTERNAL
-export const IMAGE_VISION_PROMPT = IMAGE_VISION_PROMPT_INTERNAL
-export const PPTX_PROMPT = PPTX_PROMPT_INTERNAL
-export const XLSX_PROMPT = XLSX_PROMPT_INTERNAL
-export const DOCX_PROMPT = DOCX_PROMPT_INTERNAL
-export const TEXT_ONLY_PROMPT = TEXT_ONLY_PROMPT_INTERNAL
-export const TEXT_ONLY_OCR_HIGH_PROMPT = TEXT_ONLY_OCR_HIGH_PROMPT_INTERNAL
-export const TEXT_ONLY_OCR_MEDIUM_PROMPT = TEXT_ONLY_OCR_MEDIUM_PROMPT_INTERNAL
-export const TEXT_ONLY_OCR_LOW_PROMPT = TEXT_ONLY_OCR_LOW_PROMPT_INTERNAL
 
 /** Prompt with page continuity context */
 export const CONTINUITY_PROMPT_PREFIX = `Context: You are formatting page {page} of {totalPages}.
@@ -87,63 +58,6 @@ Previous page ended with: "{previousTail}"
 Maintain continuity - if the previous context suggests a list, section, or sentence continues, preserve that continuity in your formatting.
 
 `
-
-/** All built-in prompts */
-export const PROMPTS = {
-  // Legacy text-only prompt
-  DEFAULT_TEXT: DEFAULT_TEXT_PROMPT,
-  // Vision mode prompts
-  DEFAULT_VISION: DEFAULT_VISION_PROMPT,
-  OCR_HIGH_CONFIDENCE: OCR_HIGH_CONFIDENCE_PROMPT,
-  OCR_MEDIUM_CONFIDENCE: OCR_MEDIUM_CONFIDENCE_PROMPT,
-  OCR_LOW_CONFIDENCE: OCR_LOW_CONFIDENCE_PROMPT,
-  IMAGE_ONLY: IMAGE_ONLY_PROMPT,
-  IMAGE_VISION: IMAGE_VISION_PROMPT,
-  PPTX: PPTX_PROMPT,
-  XLSX: XLSX_PROMPT,
-  DOCX: DOCX_PROMPT,
-  // Text-only mode prompts (for --llm without vision)
-  TEXT_ONLY: TEXT_ONLY_PROMPT,
-  TEXT_ONLY_OCR_HIGH: TEXT_ONLY_OCR_HIGH_PROMPT,
-  TEXT_ONLY_OCR_MEDIUM: TEXT_ONLY_OCR_MEDIUM_PROMPT,
-  TEXT_ONLY_OCR_LOW: TEXT_ONLY_OCR_LOW_PROMPT,
-} as const
-
-export type PromptPreset = keyof typeof PROMPTS
-
-// ============================================================================
-// Legacy Functions
-// ============================================================================
-
-/**
- * @deprecated Use determineTextReliability() instead
- */
-export function selectOcrPrompt(confidence: number | undefined): PromptPreset {
-  if (confidence === undefined) {
-    return 'DEFAULT_VISION'
-  }
-  if (confidence >= 0.95) {
-    return 'OCR_HIGH_CONFIDENCE'
-  }
-  if (confidence >= 0.8) {
-    return 'OCR_MEDIUM_CONFIDENCE'
-  }
-  return 'OCR_LOW_CONFIDENCE'
-}
-
-/**
- * @deprecated Use determineDocumentType() instead
- */
-export function selectFormatPrompt(extension: string | null | undefined): PromptPreset | null {
-  if (!extension) return null
-  const docType = _determineDocumentType(extension)
-  if (docType === 'pdf') return null // No specific prompt for PDF (use default)
-  if (docType === 'pptx') return 'PPTX'
-  if (docType === 'xlsx') return 'XLSX'
-  if (docType === 'docx') return 'DOCX'
-  if (docType === 'image') return 'IMAGE_VISION'
-  return null
-}
 
 // ============================================================================
 // Template Utilities
@@ -219,66 +133,4 @@ export function buildPrompt(
   }
 
   return substituteVariables(prompt, context, options?.customVariables)
-}
-
-/**
- * Extend a base prompt with modifications
- */
-export function extendPrompt(
-  base: string,
-  options: {
-    prepend?: string
-    append?: string
-    variables?: Record<string, string>
-  },
-): string {
-  let result = base
-
-  if (options.prepend) {
-    result = options.prepend + result
-  }
-
-  if (options.append) {
-    result = result + options.append
-  }
-
-  // Variables are applied at runtime via substituteVariables
-  return result
-}
-
-// ============================================================================
-// Deprecated interfaces - use PromptOptions from pipeline instead
-// ============================================================================
-
-/** @deprecated Use PromptOptions from lib/pipeline/prompts.ts instead */
-export interface VisionPromptOptions {
-  textReliability: 'digital' | 'ocr-high' | 'ocr-medium' | 'ocr-low' | 'none'
-  documentType: 'pdf' | 'pptx' | 'xlsx' | 'docx' | 'image'
-}
-
-/** @deprecated Use composePrompt() from lib/pipeline/prompts.ts instead */
-export function composeVisionPrompt(options: VisionPromptOptions): string {
-  return _composePrompt({
-    mode: 'vision',
-    textReliability: options.textReliability,
-    documentType: options.documentType,
-  })
-}
-
-/** @deprecated Use buildPromptForExtraction() from lib/pipeline/prompts.ts instead */
-export function buildVisionPromptForExtraction(options: VisionPromptOptions): string {
-  return _buildPromptForExtraction({
-    mode: 'vision',
-    textReliability: options.textReliability,
-    documentType: options.documentType,
-  })
-}
-
-/** @deprecated Use buildPromptForExtraction() from lib/pipeline/prompts.ts instead */
-export function buildPromptWithTextPlaceholder(options: VisionPromptOptions): string {
-  return _buildPromptForExtraction({
-    mode: 'text-only',
-    textReliability: options.textReliability,
-    documentType: options.documentType,
-  })
 }

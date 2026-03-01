@@ -2,9 +2,7 @@
  * Tests for the high-level library API.
  */
 
-import { describe, expect, it, vi } from 'vitest'
-
-describe('api module exports', () => {
+describe('api module exports', { timeout: 15_000 }, () => {
   it('exports sense function', async () => {
     const { sense } = await import('./api.js')
     expect(typeof sense).toBe('function')
@@ -98,7 +96,7 @@ describe('lib/index.ts exports', () => {
   })
 })
 
-describe('sense function', () => {
+describe('sense function', { timeout: 15_000 }, () => {
   it('extracts text from a PDF file', async () => {
     const { sense } = await import('./api.js')
     const result = await sense('samples/born-digital.pdf')
@@ -180,7 +178,7 @@ describe('sense function', () => {
   })
 })
 
-describe('SenseOptions type coverage', () => {
+describe('SenseOptions type coverage', { timeout: 15_000 }, () => {
   it('accepts all extraction options', async () => {
     // This test ensures TypeScript compilation works with all options
     const { sense } = await import('./api.js')

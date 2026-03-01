@@ -17,6 +17,8 @@ export type ProcessingPhase =
   | 'ocr' // OCR processing
   | 'format' // Output formatting
   | 'convert' // Format conversion (e.g., Office → PDF)
+  | 'split' // Splitting document into runs
+  | 'vision' // Vision/LLM processing
 
 // ============================================================================
 // Base Error Class
@@ -216,9 +218,14 @@ export function isRecoverableError(error: unknown): boolean {
 
 /**
  * Check if an error is an AbortError.
+ * Matches both our custom AbortError and native DOMException with name 'AbortError'
+ * (thrown by signal.throwIfAborted()).
  */
-export function isAbortError(error: unknown): error is AbortError {
-  return error instanceof AbortError
+export function isAbortError(error: unknown): error is AbortError | DOMException {
+  if (error instanceof AbortError) return true
+  // Native abort via signal.throwIfAborted() throws DOMException { name: 'AbortError' }
+  if (error instanceof DOMException && error.name === 'AbortError') return true
+  return false
 }
 
 /**

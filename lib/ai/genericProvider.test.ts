@@ -1,5 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-
 // Mock the AI SDK modules before importing
 vi.mock('ai', () => ({
   generateText: vi.fn(),
@@ -53,11 +51,11 @@ function createMockConfig(overrides?: Partial<LlmConfig>): LlmConfig {
   }
 }
 
-describe('createGenericProvider', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
+beforeEach(() => {
+  vi.clearAllMocks()
+})
 
+describe('createGenericProvider', () => {
   describe('provider properties', () => {
     it('has correct name from adapter', () => {
       const adapter = createMockAdapter({ id: 'anthropic' })

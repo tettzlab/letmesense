@@ -8,12 +8,13 @@
  */
 
 import {
+  _onRegistryReset,
   getDefaultEncoding,
   getModel,
   getModelPricing,
+  getProviderRegistry,
   type ModelConfig,
   type ModelPricing,
-  PROVIDER_REGISTRY,
   type ProviderId,
   resolveModelAlias,
   type TemperatureConfig,
@@ -52,7 +53,14 @@ export class ResolveModelError extends Error {
   }
 }
 
-const VALID_PROVIDERS = new Set(PROVIDER_REGISTRY.map((p) => p.id))
+/**
+ * Cached provider set. Auto-cleared when the model registry resets.
+ */
+let _validProviders: Set<string> | null = null
+
+_onRegistryReset(() => {
+  _validProviders = null
+})
 
 /**
  * Resolve a model spec string into a fully-populated ResolvedModel.
@@ -92,10 +100,11 @@ export function resolveModel(spec: string, providerId?: ProviderId): ResolvedMod
     )
   }
 
-  // Validate provider
-  if (!VALID_PROVIDERS.has(provider)) {
+  // Validate provider (cached after first call since registry is a lazy singleton)
+  _validProviders ??= new Set(getProviderRegistry().map((p) => p.id))
+  if (!_validProviders.has(provider)) {
     throw new ResolveModelError(
-      `Unknown provider "${provider}". Valid providers: ${[...VALID_PROVIDERS].join(', ')}`,
+      `Unknown provider "${provider}". Valid providers: ${[..._validProviders].join(', ')}`,
       'UNKNOWN_PROVIDER',
     )
   }

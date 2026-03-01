@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { getCMapUrl, getStandardFontDataUrl, loadPdfDocumentFromBytes } from './pdfjs.js'
+import {
+  getCMapUrl,
+  getPdfjsLib,
+  getStandardFontDataUrl,
+  loadPdfDocumentFromBytes,
+} from './pdfjs.js'
+import { getSafeOPS } from './pdfjsTypes.js'
 
 describe('pdfjs module', () => {
   describe('getStandardFontDataUrl', () => {
@@ -99,6 +104,22 @@ describe('pdfjs module', () => {
       // A PNG header
       const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
       await expect(loadPdfDocumentFromBytes(bytes)).rejects.toThrow()
+    })
+  })
+
+  describe('getSafeOPS hardcoded values', () => {
+    it('matches actual pdfjs-dist OPS enum', async () => {
+      const pdfjs = await getPdfjsLib()
+      const OPS = pdfjs.OPS as Record<string, number>
+      const safe = getSafeOPS()
+
+      expect(safe.save).toBe(OPS.save)
+      expect(safe.restore).toBe(OPS.restore)
+      expect(safe.transform).toBe(OPS.transform)
+      expect(safe.paintImageXObject).toBe(OPS.paintImageXObject)
+      expect(safe.paintInlineImageXObject).toBe(OPS.paintInlineImageXObject)
+      expect(safe.paintImageXObjectRepeat).toBe(OPS.paintImageXObjectRepeat)
+      expect(safe.paintInlineImageXObjectGroup).toBe(OPS.paintInlineImageXObjectGroup)
     })
   })
 })

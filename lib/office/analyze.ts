@@ -29,7 +29,7 @@ import type {
 
 /** Default analysis options */
 export const DEFAULT_ANALYZE_OPTIONS: Required<AnalyzeOptions> = {
-  minCharsForTextRich: 20,
+  minCharsForTextOnly: 20,
   minCharsForLangDetect: 80,
   maxTextSampleChars: 400,
 }
@@ -94,7 +94,7 @@ function analyzeUnit(
   const kind = classifyContentKind({
     charCount,
     imageCount,
-    minCharsForTextRich: options.minCharsForTextRich,
+    minCharsForTextOnly: options.minCharsForTextOnly,
   })
 
   return {
@@ -190,6 +190,80 @@ function analyzeSection(
 }
 
 /**
+ * Analyze a single content unit by index.
+ *
+ * @param parsed - Parsed document from OfficeParser
+ * @param index - 0-based unit index
+ * @param format - Document format
+ * @param options - Analysis options
+ * @returns ContentAttributes for the unit
+ */
+export function analyzeSingleUnit(
+  parsed: ParsedDocument,
+  index: number,
+  format: OfficeFormat,
+  options: AnalyzeOptions = {},
+): ContentAttributes {
+  const opts = { ...DEFAULT_ANALYZE_OPTIONS, ...options }
+  const units = getContentUnits(parsed, format)
+  const node = units[index]
+
+  if (!node) {
+    return {
+      unitIndex: index,
+      unitLabel: `Unit ${index + 1}`,
+      kind: 'unknown',
+      charCount: 0,
+      imageCount: 0,
+      textSample: '',
+      language: 'und',
+      error: {
+        unitIndex: index,
+        phase: 'analyze',
+        message: `Unit ${index} not found`,
+      },
+    }
+  }
+
+  try {
+    switch (format) {
+      case 'pptx':
+      case 'odp':
+        return analyzeSlide(node, index, opts)
+
+      case 'xlsx':
+      case 'ods':
+        return analyzeSheet(node, index, opts)
+
+      case 'docx':
+      case 'odt':
+        return analyzeSection(node, index, opts)
+
+      default:
+        return analyzeUnit(node, index, format, opts)
+    }
+  } catch (err) {
+    const error: ContentError = {
+      unitIndex: index,
+      phase: 'analyze',
+      message: err instanceof Error ? err.message : String(err),
+      cause: err instanceof Error ? err : undefined,
+    }
+
+    return {
+      unitIndex: index,
+      unitLabel: generateUnitLabel(format, index, node),
+      kind: 'unknown',
+      charCount: 0,
+      imageCount: 0,
+      textSample: '',
+      language: 'und',
+      error,
+    }
+  }
+}
+
+/**
  * Analyze all content units in a parsed Office document.
  *
  * @param parsed - Parsed document from OfficeParser
@@ -202,60 +276,8 @@ export async function analyzeDocument(
   format: OfficeFormat,
   options: AnalyzeOptions = {},
 ): Promise<ContentAttributes[]> {
-  const opts = { ...DEFAULT_ANALYZE_OPTIONS, ...options }
   const units = getContentUnits(parsed, format)
-  const results: ContentAttributes[] = []
-
-  for (let i = 0; i < units.length; i++) {
-    const node = units[i]
-
-    try {
-      let attrs: ContentAttributes
-
-      switch (format) {
-        case 'pptx':
-        case 'odp':
-          attrs = analyzeSlide(node, i, opts)
-          break
-
-        case 'xlsx':
-        case 'ods':
-          attrs = analyzeSheet(node, i, opts)
-          break
-
-        case 'docx':
-        case 'odt':
-          attrs = analyzeSection(node, i, opts)
-          break
-
-        default:
-          attrs = analyzeUnit(node, i, format, opts)
-      }
-
-      results.push(attrs)
-    } catch (err) {
-      // On error, create a minimal attributes object with error info
-      const error: ContentError = {
-        unitIndex: i,
-        phase: 'analyze',
-        message: err instanceof Error ? err.message : String(err),
-        cause: err instanceof Error ? err : undefined,
-      }
-
-      results.push({
-        unitIndex: i,
-        unitLabel: generateUnitLabel(format, i, node),
-        kind: 'unknown',
-        charCount: 0,
-        imageCount: 0,
-        textSample: '',
-        language: 'und',
-        error,
-      })
-    }
-  }
-
-  return results
+  return units.map((_, i) => analyzeSingleUnit(parsed, i, format, options))
 }
 
 /**
@@ -263,8 +285,8 @@ export async function analyzeDocument(
  */
 export function getAnalysisSummary(attributes: ContentAttributes[]): {
   totalUnits: number
-  textRichCount: number
-  imageHeavyCount: number
+  textOnlyCount: number
+  imageOnlyCount: number
   mixedCount: number
   emptyCount: number
   unknownCount: number
@@ -273,8 +295,8 @@ export function getAnalysisSummary(attributes: ContentAttributes[]): {
 } {
   const summary = {
     totalUnits: attributes.length,
-    textRichCount: 0,
-    imageHeavyCount: 0,
+    textOnlyCount: 0,
+    imageOnlyCount: 0,
     mixedCount: 0,
     emptyCount: 0,
     unknownCount: 0,
@@ -284,11 +306,11 @@ export function getAnalysisSummary(attributes: ContentAttributes[]): {
 
   for (const attr of attributes) {
     switch (attr.kind) {
-      case 'text-rich':
-        summary.textRichCount++
+      case 'text-only':
+        summary.textOnlyCount++
         break
-      case 'image-heavy':
-        summary.imageHeavyCount++
+      case 'image-only':
+        summary.imageOnlyCount++
         break
       case 'mixed':
         summary.mixedCount++

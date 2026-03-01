@@ -15,10 +15,10 @@ import {
   MAX_IMAGE_OUTPUT_BYTES,
   MAX_IMAGE_OUTPUT_DIMENSION,
 } from '../../images/viewImage.js'
-import { obs } from '../../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../../observability/types.js'
+import { obs, SemanticAttributes } from '../../observability/index.js'
 import type { CliOption, FormatPlugin, RenderedContent } from '../../pipeline/plugin.js'
 import type { ContentKind, UnitExtractionResult } from '../../pipeline/types.js'
+import { Metrics, Spans } from './signals.js'
 import {
   classifyImage,
   detectImageFormat,
@@ -33,7 +33,7 @@ import {
 // Constants
 // ============================================================================
 
-const DEFAULT_FETCH_TIMEOUT_MS = 30000
+import { DEFAULT_FETCH_TIMEOUT_MS } from '../../common/timeouts.js'
 
 // ============================================================================
 // Image Plugin Implementation
@@ -75,32 +75,32 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
     const { tracer, metrics, logger } = obs('image.plugin')
     const { fetchTimeout = DEFAULT_FETCH_TIMEOUT_MS, maxDimension, quality } = options
 
-    return tracer.startSpan(SpanNames.IMAGE_PLUGIN_LOAD, async (span) => {
+    return tracer.startSpan(Spans.LOAD, async (span) => {
       let bytes: Uint8Array
       let source: string
 
       if (input instanceof Uint8Array) {
         bytes = input
         source = 'buffer'
-        span.setAttribute('inputType', 'buffer')
+        span.setAttribute(SemanticAttributes.INPUT_TYPE, 'buffer')
       } else if (Buffer.isBuffer(input)) {
         bytes = new Uint8Array(input)
         source = 'buffer'
-        span.setAttribute('inputType', 'buffer')
+        span.setAttribute(SemanticAttributes.INPUT_TYPE, 'buffer')
       } else if (input instanceof URL) {
-        span.setAttribute('inputType', 'url')
+        span.setAttribute(SemanticAttributes.INPUT_TYPE, 'url')
         const result = await fetchImage(input.toString(), fetchTimeout)
         bytes = result.bytes
         source = input.toString()
       } else if (typeof input === 'string') {
         if (input.startsWith('http://') || input.startsWith('https://')) {
-          span.setAttribute('inputType', 'url')
+          span.setAttribute(SemanticAttributes.INPUT_TYPE, 'url')
           const result = await fetchImage(input, fetchTimeout)
           bytes = result.bytes
           source = input
         } else {
           // File path
-          span.setAttribute('inputType', 'file')
+          span.setAttribute(SemanticAttributes.INPUT_TYPE, 'file')
           const stat = await fs.stat(input)
           if (stat.size > MAX_IMAGE_FILE_BYTES) {
             const sizeMB = (stat.size / 1024 / 1024).toFixed(1)
@@ -115,7 +115,7 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
         throw new Error('Invalid input type: expected string, Uint8Array, Buffer, or URL')
       }
 
-      span.setAttribute('bytes', bytes.length)
+      span.setAttribute(SemanticAttributes.BYTES, bytes.length)
 
       // Detect format
       const imageFormat = detectImageFormat(source) ?? detectFormatFromBytes(bytes)
@@ -131,12 +131,10 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
         quality,
       })
 
-      span.setAttribute('width', width)
-      span.setAttribute('height', height)
-      metrics.counter(SemanticMetrics.IMAGE_PLUGIN_LOADS_COUNT).add(1, { format: imageFormat })
-      metrics
-        .histogram(SemanticMetrics.IMAGE_PLUGIN_LOAD_BYTES)
-        .record(bytes.length, { format: imageFormat })
+      span.setAttribute(SemanticAttributes.WIDTH, width)
+      span.setAttribute(SemanticAttributes.HEIGHT, height)
+      metrics.counter(Metrics.LOAD_COUNT).add(1, { format: imageFormat })
+      metrics.histogram(Metrics.LOAD_BYTES).record(bytes.length, { format: imageFormat })
       logger.debug({ imageFormat, width, height, bytes: bytes.length }, 'Image loaded')
 
       // Store a copy of bytes
@@ -159,10 +157,10 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
     const { tracer, metrics } = obs('image.plugin')
     const { imageFormat, mimeType, source, width, height, bytes } = doc as ImageLoadedDocument
 
-    return tracer.startSpan(SpanNames.IMAGE_PLUGIN_PARSE, async (span) => {
+    return tracer.startSpan(Spans.PARSE, async (span) => {
       span.setAttribute('imageFormat', imageFormat)
-      span.setAttribute('width', width)
-      span.setAttribute('height', height)
+      span.setAttribute(SemanticAttributes.WIDTH, width)
+      span.setAttribute(SemanticAttributes.HEIGHT, height)
 
       // Images are single-unit documents
       const unit: ImageUnit = {
@@ -180,8 +178,8 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
         resized: false,
       }
 
-      span.setAttribute('unitCount', 1)
-      metrics.counter(SemanticMetrics.IMAGE_PLUGIN_UNITS_COUNT).add(1, { format: imageFormat })
+      span.setAttribute(SemanticAttributes.UNIT_COUNT, 1)
+      metrics.counter(Metrics.UNIT_COUNT).add(1, { format: imageFormat })
 
       return {
         units: [unit],
@@ -200,10 +198,10 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
     const { tracer, metrics } = obs('image.plugin')
     const { imageFormat, width, height, bytes } = doc as ImageLoadedDocument
 
-    return tracer.startSpan(SpanNames.IMAGE_PLUGIN_ANALYZE_UNIT, async (span) => {
+    return tracer.startSpan(Spans.ANALYZE_UNIT, async (span) => {
       span.setAttribute('imageFormat', imageFormat)
-      span.setAttribute('width', width)
-      span.setAttribute('height', height)
+      span.setAttribute(SemanticAttributes.WIDTH, width)
+      span.setAttribute(SemanticAttributes.HEIGHT, height)
 
       // Get additional metadata using sharp (for raster images)
       let metadata: ImageUnit['metadata']
@@ -230,9 +228,7 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
 
       const kind = classifyImage()
       span.setAttribute('kind', kind)
-      metrics
-        .counter(SemanticMetrics.IMAGE_PLUGIN_ANALYZE_UNITS_COUNT)
-        .add(1, { format: imageFormat })
+      metrics.counter(Metrics.ANALYZE_UNIT_COUNT).add(1, { format: imageFormat })
 
       return {
         ...unit,
@@ -257,18 +253,16 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
     // Return a placeholder indicating image content
     const { width, height, imageFormat, source } = doc as ImageLoadedDocument
 
-    return tracer.startSpan(SpanNames.IMAGE_PLUGIN_EXTRACT_UNIT, async (span) => {
+    return tracer.startSpan(Spans.EXTRACT_UNIT, async (span) => {
       span.setAttribute('imageFormat', imageFormat)
-      span.setAttribute('width', width)
-      span.setAttribute('height', height)
+      span.setAttribute(SemanticAttributes.WIDTH, width)
+      span.setAttribute(SemanticAttributes.HEIGHT, height)
 
       const description = `[Image: ${path.basename(source)} (${width}x${height} ${imageFormat.toUpperCase()})]`
 
-      span.setAttribute('charCount', 0)
-      span.setAttribute('method', 'placeholder')
-      metrics
-        .counter(SemanticMetrics.IMAGE_PLUGIN_EXTRACT_UNITS_COUNT)
-        .add(1, { format: imageFormat })
+      span.setAttribute(SemanticAttributes.CHAR_COUNT, 0)
+      span.setAttribute(SemanticAttributes.METHOD, 'placeholder')
+      metrics.counter(Metrics.EXTRACT_UNIT_COUNT).add(1, { format: imageFormat })
 
       return {
         text: description,
@@ -286,9 +280,9 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
     const { bytes, imageFormat, width, height } = doc as ImageLoadedDocument
     const { scale = 1 } = options
 
-    return tracer.startSpan(SpanNames.IMAGE_PLUGIN_RENDER_UNIT, async (span) => {
+    return tracer.startSpan(Spans.RENDER_UNIT, async (span) => {
       span.setAttribute('imageFormat', imageFormat)
-      span.setAttribute('scale', scale)
+      span.setAttribute(SemanticAttributes.SCALE, scale)
       span.setAttribute('originalWidth', width)
       span.setAttribute('originalHeight', height)
 
@@ -302,9 +296,7 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
       const finalHeight = outputHeight ?? height
       span.setAttribute('outputWidth', finalWidth)
       span.setAttribute('outputHeight', finalHeight)
-      metrics
-        .counter(SemanticMetrics.IMAGE_PLUGIN_RENDER_UNITS_COUNT)
-        .add(1, { format: imageFormat })
+      metrics.counter(Metrics.RENDER_UNIT_COUNT).add(1, { format: imageFormat })
 
       return {
         base64: base64Data,

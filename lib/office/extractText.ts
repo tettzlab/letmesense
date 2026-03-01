@@ -3,8 +3,8 @@
  * Handles different extraction strategies based on content kind.
  */
 
-import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { DEFAULT_PAGE_TIMEOUT_MS } from '../common/timeouts.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
 import { requiresOcr } from './classify.js'
 import {
   type ContentNode,
@@ -14,21 +14,21 @@ import {
   getTableData,
   type ParsedDocument,
 } from './parser.js'
+import { Metrics, Spans } from './signals.js'
 import type {
   ContentAttributes,
   ContentError,
+  ContentKind,
   ContentRun,
   ExtractOptions,
   OfficeFormat,
 } from './types.js'
 
 /** Default extraction options */
-export const DEFAULT_EXTRACT_OPTIONS: Required<
-  Omit<ExtractOptions, 'kind' | 'slideRange' | 'sheetNames'>
-> = {
+const DEFAULT_EXTRACT_OPTIONS: Required<Omit<ExtractOptions, 'kind' | 'slides' | 'sheets'>> = {
   ocr: false,
   ocrLang: 'eng',
-  unitTimeout: 60000,
+  unitTimeout: DEFAULT_PAGE_TIMEOUT_MS,
   includeNotes: true,
   headers: false,
 }
@@ -139,6 +139,66 @@ export function filterSheetsByName(
 }
 
 /**
+ * Extract text from a single content unit by index.
+ *
+ * @param parsed - Parsed document
+ * @param unitIndex - 0-based unit index
+ * @param format - Document format
+ * @param kind - Content kind of the unit (for OCR check)
+ * @param options - Extraction options
+ * @returns Extracted text for the unit
+ */
+export function extractSingleUnit(
+  parsed: ParsedDocument,
+  unitIndex: number,
+  format: OfficeFormat,
+  kind: ContentKind,
+  options: ExtractOptions = {},
+): ExtractedUnit {
+  const opts = { ...DEFAULT_EXTRACT_OPTIONS, ...options }
+  const units = getContentUnits(parsed, format)
+  const node = units[unitIndex]
+
+  if (!node) {
+    return {
+      unitIndex,
+      text: '',
+      error: {
+        unitIndex,
+        phase: 'extract',
+        message: `Unit ${unitIndex} not found`,
+      },
+    }
+  }
+
+  try {
+    const needsOcr = requiresOcr(kind)
+
+    if (needsOcr && !opts.ocr) {
+      return { unitIndex, text: '[Image content - OCR required]' }
+    }
+
+    if (needsOcr && opts.ocr) {
+      return { unitIndex, text: '[Image content - OCR not yet implemented]' }
+    }
+
+    const text = extractFromUnit(node, format, opts)
+    return { unitIndex, text }
+  } catch (err) {
+    return {
+      unitIndex,
+      text: '',
+      error: {
+        unitIndex,
+        phase: 'extract',
+        message: err instanceof Error ? err.message : String(err),
+        cause: err instanceof Error ? err : undefined,
+      },
+    }
+  }
+}
+
+/**
  * Extract text from a parsed Office document.
  *
  * @param parsed - Parsed document from OfficeParser
@@ -155,10 +215,10 @@ export async function extractText(
 ): Promise<ExtractedUnit[]> {
   const { tracer, metrics, logger } = obs('office.text')
 
-  return tracer.startSpan(SpanNames.OFFICE_TEXT_EXTRACT, async (span) => {
+  return tracer.startSpan(Spans.TEXT_EXTRACT, async (span) => {
     const start = performance.now()
-    span.setAttribute('format', format)
-    span.setAttribute('unitCount', attributes.length)
+    span.setAttribute(SemanticAttributes.FORMAT, format)
+    span.setAttribute(SemanticAttributes.UNIT_COUNT, attributes.length)
 
     const opts = { ...DEFAULT_EXTRACT_OPTIONS, ...options }
     const units = getContentUnits(parsed, format)
@@ -167,13 +227,13 @@ export async function extractText(
     // Determine which units to extract
     let targetIndices: number[]
 
-    if (format === 'pptx' && opts.slideRange) {
-      targetIndices = parseSlideRange(opts.slideRange, units.length)
-    } else if (format === 'xlsx' && opts.sheetNames) {
+    if (format === 'pptx' && opts.slides) {
+      targetIndices = parseSlideRange(opts.slides, units.length)
+    } else if (format === 'xlsx' && opts.sheets) {
       const sheetAttrs = attributes
         .filter((a): a is ContentAttributes & { sheetName: string } => 'sheetName' in a)
         .map((a) => ({ sheetName: a.sheetName, unitIndex: a.unitIndex }))
-      targetIndices = filterSheetsByName(opts.sheetNames, sheetAttrs)
+      targetIndices = filterSheetsByName(opts.sheets, sheetAttrs)
     } else {
       targetIndices = attributes.map((a) => a.unitIndex)
     }
@@ -240,13 +300,11 @@ export async function extractText(
     const errorCount = results.filter((r) => r.error).length
 
     span.setAttribute('totalChars', totalChars)
-    span.setAttribute('errorCount', errorCount)
-    span.setAttribute('durationMs', Math.round(durationMs))
+    span.setAttribute(SemanticAttributes.ERROR_COUNT, errorCount)
+    span.setAttribute(SemanticAttributes.DURATION_MS, Math.round(durationMs))
 
-    metrics.counter(SemanticMetrics.OFFICE_TEXT_EXTRACT_COUNT).add(1, { format })
-    metrics
-      .histogram(SemanticMetrics.OFFICE_TEXT_EXTRACT_DURATION_MS)
-      .record(durationMs, { format })
+    metrics.counter(Metrics.TEXT_EXTRACT_COUNT).add(1, { format })
+    metrics.histogram(Metrics.TEXT_EXTRACT_DURATION_MS).record(durationMs, { format })
     logger.debug({ format, unitCount: results.length, totalChars, durationMs }, 'Text extracted')
 
     return results

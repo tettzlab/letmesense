@@ -1,15 +1,53 @@
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { SemanticAttributes } from '../observability/types.js'
 import type { PdfjsDocumentInitParameters } from './pdfjsTypes.js'
-
-export { pdfjsLib }
+import { Metrics, Spans } from './signals.js'
 
 // Re-export types for use in other modules
 export type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist'
+
+/**
+ * Lazy-loaded pdfjs-dist module.
+ *
+ * pdfjs-dist requires globalThis.Path2D to be set before it loads for proper
+ * canvas rendering in Node.js. We use dynamic import to ensure @napi-rs/canvas
+ * Path2D is available before pdfjs-dist initializes.
+ */
+let pdfjsLibPromise: Promise<typeof import('pdfjs-dist/legacy/build/pdf.mjs')> | null = null
+
+async function getPdfjsLib() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = (async () => {
+      // Set up Path2D from @napi-rs/canvas before pdfjs-dist loads.
+      // pdfjs-dist checks globalThis.Path2D during initialization and uses it
+      // for font rendering via ctx.fill(path). Without this, rendering fails with:
+      // "Error: Value is non of these types `String`, `Path`"
+      if (!globalThis.Path2D) {
+        const canvas = await import('@napi-rs/canvas')
+        // Use type assertion - @napi-rs/canvas Path2D is compatible at runtime
+        // but has additional methods that the standard Path2D type doesn't include
+        globalThis.Path2D = canvas.Path2D as unknown as typeof globalThis.Path2D
+      }
+
+      // Now safe to import pdfjs-dist
+      return import('pdfjs-dist/legacy/build/pdf.mjs')
+    })().catch((err) => {
+      // Reset so subsequent calls can retry instead of caching a rejected promise
+      pdfjsLibPromise = null
+      throw err
+    })
+  }
+  return pdfjsLibPromise
+}
+
+/**
+ * Get the lazily-loaded pdfjs-dist library.
+ * Ensures Path2D polyfill is available before returning.
+ */
+export { getPdfjsLib }
 
 function resolvePdfjsAssetDir(exampleFile: string): string {
   const require = createRequire(import.meta.url)
@@ -37,8 +75,11 @@ export function getCMapUrl(): string {
 export async function loadPdfDocumentFromBytes(pdfBytes: Uint8Array) {
   const { tracer, metrics, logger } = obs('pdf.pdfjs')
 
-  return tracer.startSpan(SpanNames.PDF_LOAD_DOCUMENT, async (span) => {
-    span.setAttribute('bytes', pdfBytes.length)
+  return tracer.startSpan(Spans.LOAD_DOCUMENT, async (span) => {
+    span.setAttribute(SemanticAttributes.BYTES, pdfBytes.length)
+
+    // Get lazily-initialized pdfjs with Path2D polyfill
+    const pdfjs = await getPdfjsLib()
 
     const params: PdfjsDocumentInitParameters = {
       data: pdfBytes,
@@ -49,12 +90,12 @@ export async function loadPdfDocumentFromBytes(pdfBytes: Uint8Array) {
       cMapPacked: true,
     }
     // biome-ignore lint/suspicious/noExplicitAny: pdfjs-dist type definition incomplete
-    const loadingTask = pdfjsLib.getDocument(params as any)
+    const loadingTask = pdfjs.getDocument(params as any)
     const doc = await loadingTask.promise
 
     span.setAttribute('numPages', doc.numPages)
-    metrics.counter(SemanticMetrics.PDF_DOCUMENTS_LOADED_COUNT).add(1)
-    metrics.histogram(SemanticMetrics.PDF_DOCUMENT_BYTES).record(pdfBytes.length)
+    metrics.counter(Metrics.DOCUMENT_LOAD_COUNT).add(1)
+    metrics.histogram(Metrics.DOCUMENT_BYTES).record(pdfBytes.length)
     logger.debug({ bytes: pdfBytes.length, numPages: doc.numPages }, 'PDF document loaded')
 
     return doc

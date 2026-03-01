@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { obs } from '../observability/index.js'
-import { SemanticMetrics } from '../observability/types.js'
+import { Metrics } from './signals.js'
 
 /**
  * Get the repository root directory.
@@ -48,7 +48,7 @@ export function shouldUseOffline(tessdataDir: string, lang: string): boolean {
   const useOffline = fs.existsSync(tessdataDir) && hasLocalLangFile(tessdataDir, lang)
 
   metrics
-    .counter(SemanticMetrics.OCR_TESSDATA_LOADS_COUNT)
+    .counter(Metrics.TESSDATA_LOAD_COUNT)
     .add(1, { source: useOffline ? 'local' : 'cdn', lang })
   logger.debug({ tessdataDir, lang, useOffline }, 'Tessdata source determined')
 

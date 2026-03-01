@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import { type ClassifyOptions, classifyPageKind } from './classify.js'
 
 describe('classifyPageKind', () => {

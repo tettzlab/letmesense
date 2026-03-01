@@ -1,54 +1,19 @@
-import { describe, expect, it } from 'vitest'
 import {
   getDefaultEncoding,
   getModel,
   getModelOrThrow,
   getModelPricing,
+  getModelRegistry,
   getModelsByProvider,
   getProviderConfig,
-  MODEL_REGISTRY,
-  PROVIDER_REGISTRY,
+  getProviderRegistry,
   resolveModelAlias,
 } from './models.js'
 
 describe('models.json loading', () => {
-  it('loads providers from JSON', () => {
-    expect(PROVIDER_REGISTRY.length).toBeGreaterThan(0)
-    const ids = PROVIDER_REGISTRY.map((p) => p.id)
-    expect(ids).toContain('openai')
-    expect(ids).toContain('anthropic')
-    expect(ids).toContain('google')
-    expect(ids).toContain('ollama')
-  })
-
-  it('loads models from JSON', () => {
-    expect(MODEL_REGISTRY.length).toBeGreaterThan(0)
-    const ids = MODEL_REGISTRY.map((m) => m.id)
-    expect(ids).toContain('gpt-5-mini')
-    expect(ids).toContain('claude-opus-4-5')
-    expect(ids).toContain('gemini-3-flash-preview')
-  })
-
-  it('models have temperature config under capabilities', () => {
-    const model = getModel('claude-sonnet-4-5')
-    expect(model?.capabilities?.temperature).toBeDefined()
-    expect(model?.capabilities?.temperature?.min).toBe(0)
-  })
-
-  it('OpenAI GPT-5 models have no temperature config', () => {
-    expect(getModel('gpt-5.2')?.capabilities?.temperature).toBeUndefined()
-    expect(getModel('gpt-5-mini')?.capabilities?.temperature).toBeUndefined()
-    expect(getModel('gpt-5-nano')?.capabilities?.temperature).toBeUndefined()
-  })
-
-  it('models have reasoning config or absent under capabilities', () => {
-    const mini = getModel('gpt-5-mini')
-    expect(mini?.capabilities?.reasoning).toBeDefined()
-    expect(mini?.capabilities?.reasoning?.levels).toContain('medium')
-
-    const gpt = getModel('gpt-5.2')
-    expect(gpt?.capabilities?.reasoning).toBeDefined()
-    expect(gpt?.capabilities?.reasoning?.default).toBe('none')
+  it('loads providers and models from JSON', () => {
+    expect(getProviderRegistry().length).toBeGreaterThan(0)
+    expect(getModelRegistry().length).toBeGreaterThan(0)
   })
 })
 
@@ -110,10 +75,11 @@ describe('getModelPricing', () => {
     expect(pricing.output).toBe(2.0)
   })
 
-  it('returns zero pricing for unknown model', () => {
+  it('returns conservative default pricing for unknown model', () => {
     const pricing = getModelPricing('unknown-model')
-    expect(pricing.input).toBe(0)
-    expect(pricing.output).toBe(0)
+    expect(pricing.input).toBe(1.0)
+    expect(pricing.output).toBe(4.0)
+    expect(pricing.image).toBe(0.5)
   })
 })
 

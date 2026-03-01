@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import { analyzeDocument, DEFAULT_ANALYZE_OPTIONS, getAnalysisSummary } from './analyze.js'
 import type { ContentNode, ParsedDocument } from './parser.js'
 import type {
@@ -71,7 +70,7 @@ function createSectionNode(text: string, headingText?: string, hasTables = false
 
 describe('DEFAULT_ANALYZE_OPTIONS', () => {
   it('has expected default values', () => {
-    expect(DEFAULT_ANALYZE_OPTIONS.minCharsForTextRich).toBe(20)
+    expect(DEFAULT_ANALYZE_OPTIONS.minCharsForTextOnly).toBe(20)
     expect(DEFAULT_ANALYZE_OPTIONS.minCharsForLangDetect).toBe(80)
     expect(DEFAULT_ANALYZE_OPTIONS.maxTextSampleChars).toBe(400)
   })
@@ -87,7 +86,7 @@ describe('analyzeDocument', () => {
       const results = await analyzeDocument(parsed, 'pptx')
 
       expect(results).toHaveLength(1)
-      expect(results[0].kind).toBe('text-rich')
+      expect(results[0].kind).toBe('text-only')
       expect(results[0].unitLabel).toBe('Slide 1')
       expect(results[0].charCount).toBeGreaterThan(20)
     })
@@ -98,7 +97,7 @@ describe('analyzeDocument', () => {
       const results = await analyzeDocument(parsed, 'pptx')
 
       expect(results).toHaveLength(1)
-      expect(results[0].kind).toBe('image-heavy')
+      expect(results[0].kind).toBe('image-only')
       expect(results[0].imageCount).toBe(3)
     })
 
@@ -151,7 +150,7 @@ describe('analyzeDocument', () => {
       const results = (await analyzeDocument(parsed, 'xlsx')) as SheetAttributes[]
 
       expect(results).toHaveLength(1)
-      expect(results[0].kind).toBe('text-rich')
+      expect(results[0].kind).toBe('text-only')
       expect(results[0].unitLabel).toBe('Sheet: Sales')
       expect(results[0].sheetName).toBe('Sales')
     })
@@ -183,7 +182,7 @@ describe('analyzeDocument', () => {
       const results = (await analyzeDocument(parsed, 'docx')) as SectionAttributes[]
 
       expect(results).toHaveLength(1)
-      expect(results[0].kind).toBe('text-rich')
+      expect(results[0].kind).toBe('text-only')
       expect(results[0].headingText).toBe('Introduction')
       expect(results[0].headingLevel).toBe(1)
     })
@@ -231,16 +230,16 @@ describe('analyzeDocument', () => {
   })
 
   describe('custom options', () => {
-    it('respects minCharsForTextRich option', async () => {
+    it('respects minCharsForTextOnly option', async () => {
       const parsed = createParsedDocument([createSlideNode('Short text here')])
 
       // With default (20), 15 chars = empty
       const defaultResults = await analyzeDocument(parsed, 'pptx')
       expect(defaultResults[0].kind).toBe('empty')
 
-      // With custom (10), 15 chars = text-rich
-      const customResults = await analyzeDocument(parsed, 'pptx', { minCharsForTextRich: 10 })
-      expect(customResults[0].kind).toBe('text-rich')
+      // With custom (10), 15 chars = text-only
+      const customResults = await analyzeDocument(parsed, 'pptx', { minCharsForTextOnly: 10 })
+      expect(customResults[0].kind).toBe('text-only')
     })
   })
 
@@ -297,7 +296,7 @@ describe('getAnalysisSummary', () => {
       {
         unitIndex: 0,
         unitLabel: 'Unit 1',
-        kind: 'text-rich',
+        kind: 'text-only',
         charCount: 100,
         imageCount: 0,
         textSample: '',
@@ -306,7 +305,7 @@ describe('getAnalysisSummary', () => {
       {
         unitIndex: 1,
         unitLabel: 'Unit 2',
-        kind: 'image-heavy',
+        kind: 'image-only',
         charCount: 10,
         imageCount: 3,
         textSample: '',
@@ -344,8 +343,8 @@ describe('getAnalysisSummary', () => {
     const summary = getAnalysisSummary(attributes)
 
     expect(summary.totalUnits).toBe(5)
-    expect(summary.textRichCount).toBe(1)
-    expect(summary.imageHeavyCount).toBe(1)
+    expect(summary.textOnlyCount).toBe(1)
+    expect(summary.imageOnlyCount).toBe(1)
     expect(summary.mixedCount).toBe(1)
     expect(summary.emptyCount).toBe(1)
     expect(summary.unknownCount).toBe(1)
@@ -356,7 +355,7 @@ describe('getAnalysisSummary', () => {
       {
         unitIndex: 0,
         unitLabel: 'Unit 1',
-        kind: 'text-rich',
+        kind: 'text-only',
         charCount: 100,
         imageCount: 0,
         textSample: '',
@@ -375,7 +374,7 @@ describe('getAnalysisSummary', () => {
       {
         unitIndex: 0,
         unitLabel: 'Unit 1',
-        kind: 'text-rich',
+        kind: 'text-only',
         charCount: 100,
         imageCount: 0,
         textSample: '',
@@ -384,7 +383,7 @@ describe('getAnalysisSummary', () => {
       {
         unitIndex: 1,
         unitLabel: 'Unit 2',
-        kind: 'text-rich',
+        kind: 'text-only',
         charCount: 100,
         imageCount: 0,
         textSample: '',
@@ -393,7 +392,7 @@ describe('getAnalysisSummary', () => {
       {
         unitIndex: 2,
         unitLabel: 'Unit 3',
-        kind: 'text-rich',
+        kind: 'text-only',
         charCount: 100,
         imageCount: 0,
         textSample: '',
@@ -422,8 +421,8 @@ describe('getAnalysisSummary', () => {
     const summary = getAnalysisSummary([])
 
     expect(summary.totalUnits).toBe(0)
-    expect(summary.textRichCount).toBe(0)
-    expect(summary.imageHeavyCount).toBe(0)
+    expect(summary.textOnlyCount).toBe(0)
+    expect(summary.imageOnlyCount).toBe(0)
     expect(summary.mixedCount).toBe(0)
     expect(summary.emptyCount).toBe(0)
     expect(summary.unknownCount).toBe(0)

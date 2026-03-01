@@ -1,32 +1,18 @@
 /**
  * Error classes for Office document extraction operations.
- * Mirrors the letmesense error hierarchy for consistency.
+ * Extends the pipeline error hierarchy for unified catch handling.
  */
 
-/** Phase of Office processing where error occurred */
-export type OfficeErrorPhase = 'load' | 'parse' | 'analyze' | 'extract' | 'convert' | 'vision'
+import { PipelineError, type ProcessingPhase } from '../pipeline/errors.js'
 
 /**
  * Base error class for all Office extraction operations.
- * All Office-related errors extend this class for easy catching.
+ * Extends PipelineError for unified catch handling.
  */
-export class OfficeExtractionError extends Error {
-  /** Phase of processing where error occurred */
-  public readonly phase?: OfficeErrorPhase
-
-  constructor(
-    message: string,
-    public readonly cause?: Error,
-    phase?: OfficeErrorPhase,
-  ) {
-    super(message)
+export class OfficeExtractionError extends PipelineError {
+  constructor(message: string, cause?: Error, phase?: ProcessingPhase) {
+    super(message, phase ?? 'extract', { cause, recoverable: false })
     this.name = 'OfficeExtractionError'
-    this.phase = phase
-
-    // Maintain proper stack trace
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor)
-    }
   }
 }
 

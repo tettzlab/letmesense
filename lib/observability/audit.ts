@@ -5,7 +5,7 @@
  * enabling queries like: audit.event_type="tool.denied"
  *
  * @example
- * import { auditToolApproved, auditToolDenied } from '../lib/observability/audit'
+ * import { auditToolApproved, auditToolDenied } from '../lib/observability/audit.js'
  *
  * auditToolApproved(logger, 'bash')
  * // {"audit.event_type":"tool.approved","audit.tool_name":"bash","audit.user_decision":"approved"}
@@ -213,7 +213,7 @@ export function auditToolCached(logger: Logger, toolName: string): void {
     'tool.cached',
     {
       [AuditAttributes.TOOL_NAME]: toolName,
-      [AuditAttributes.USER_DECISION]: 'cached',
+      [AuditAttributes.OUTCOME]: 'cached',
     },
     `Tool approval cached: ${toolName}`,
   )
@@ -311,7 +311,7 @@ export function auditContextCompacted(
     {
       'context.before_chars': beforeChars,
       'context.after_chars': afterChars,
-      'context.ratio': afterChars / beforeChars,
+      'context.ratio': beforeChars > 0 ? afterChars / beforeChars : 0,
     },
     'Context compacted',
   )

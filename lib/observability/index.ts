@@ -67,8 +67,6 @@ export {
   getRetryDelay,
   isRetryableError,
 } from './errors.js'
-// Re-export health metrics
-export { createHealthMetrics, HealthMetrics } from './health.js'
 export type {
   Counter,
   Environment,
@@ -83,7 +81,6 @@ export type {
   ObservabilityFactory,
   Span,
   SpanAttributes,
-  SpanLink,
   Tracer,
 } from './types.js'
 export {
@@ -91,9 +88,7 @@ export {
   COST_BOUNDARIES,
   LATENCY_BOUNDARIES,
   SemanticAttributes,
-  SemanticMetrics,
   SIZE_BOUNDARIES,
-  SpanNames,
   TOKEN_BOUNDARIES,
 } from './types.js'
 
@@ -116,7 +111,7 @@ import type {
  * @example
  * // Full observability with OTEL
  * const factory = createObservability({
- *   service: 'letmesense',
+ *   service: 'my-service',
  *   environment: 'production',
  *   telemetryEnabled: true,
  * })
@@ -146,7 +141,7 @@ export function createObservability(config: ObservabilityConfig): ObservabilityF
  * Create observability from environment variables.
  *
  * Reads:
- * - OTEL_SERVICE_NAME (default: 'letmesense')
+ * - OTEL_SERVICE_NAME (default: 'app')
  * - NODE_ENV (default: 'development')
  * - LOG_LEVEL (default: 'info' in prod, 'debug' in dev)
  * - OTEL_EXPORTER_OTLP_ENDPOINT: When set, enables OTEL export to this endpoint
@@ -156,13 +151,14 @@ export function createObservabilityFromEnv(): ObservabilityFactory {
   const environment = process.env.NODE_ENV ?? 'development'
   const isDev = environment === 'development'
 
-  // Enable telemetry if endpoint is configured and not explicitly disabled
+  // Enable telemetry if endpoint is configured and not explicitly disabled.
+  // For console debugging, pass consoleExporter: true to createObservability() directly.
   const hasEndpoint = !!process.env.OTEL_EXPORTER_OTLP_ENDPOINT
   const isDisabled = process.env.OTEL_SDK_DISABLED === 'true'
   const telemetryEnabled = hasEndpoint && !isDisabled
 
   return createObservability({
-    service: process.env.OTEL_SERVICE_NAME ?? 'letmesense',
+    service: process.env.OTEL_SERVICE_NAME ?? 'app',
     environment,
     logLevel: process.env.LOG_LEVEL ?? (isDev ? 'debug' : 'info'),
     telemetryEnabled,
@@ -181,7 +177,7 @@ let _initialized = false
  * Call this from CLI startup to register the factory before any obs() calls.
  *
  * @example
- * // cli/letmesense.ts
+ * // CLI entrypoint
  * const factory = createObservability({ ... })
  * setObservabilityFactory(factory)
  * await factory.init()
@@ -207,7 +203,7 @@ export function getObservabilityFactory(): ObservabilityFactory {
  *
  * @example
  * // app/server.ts
- * import { initObservability } from '../lib/observability'
+ * import { initObservability } from '../lib/observability/index.js'
  * await initObservability()
  */
 export async function initObservability(): Promise<void> {
@@ -238,7 +234,7 @@ export async function shutdownObservability(): Promise<void> {
  * @returns Observability instance with logger, tracer, and metrics
  *
  * @example
- * import { obs } from '../lib/observability'
+ * import { obs } from '../lib/observability/index.js'
  *
  * const { logger, tracer, metrics } = obs('ai')
  *
@@ -246,7 +242,7 @@ export async function shutdownObservability(): Promise<void> {
  *   span.setAttribute('model', 'gpt-4')
  *   logger.info({ prompt: '...' }, 'Starting generation')
  *   // ... work
- *   metrics.counter('ai.requests').add(1)
+ *   metrics.counter('ai.request.count').add(1)
  * })
  */
 export function obs(domain: string): Observability {

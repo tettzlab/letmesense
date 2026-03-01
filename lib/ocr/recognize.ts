@@ -5,12 +5,13 @@
 
 import type { Worker } from 'tesseract.js'
 
-import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { DEFAULT_PAGE_TIMEOUT_MS } from '../common/timeouts.js'
+import { obs, SemanticAttributes } from '../observability/index.js'
+import { Metrics, Spans } from './signals.js'
 import type { OcrOptions, OcrResult, OcrResultWithOrientation } from './types.js'
 import { createOcrWorker, terminateWorker } from './worker.js'
 
-const DEFAULT_TIMEOUT_MS = 60000
+const DEFAULT_TIMEOUT_MS = DEFAULT_PAGE_TIMEOUT_MS
 
 /**
  * OCR an image buffer using Tesseract.js.
@@ -26,7 +27,7 @@ export async function recognizeImage(
 ): Promise<OcrResult> {
   const { tracer, metrics, logger } = obs('ocr')
 
-  return tracer.startSpan(SpanNames.OCR_RECOGNIZE, async (span) => {
+  return tracer.startSpan(Spans.RECOGNIZE, async (span) => {
     span.setAttribute('lang', options.lang)
     span.setAttribute('imageBytes', imageBuffer.length)
 
@@ -43,12 +44,10 @@ export async function recognizeImage(
         'OCR timed out',
       )
 
-      span.setAttribute('confidence', result.confidence)
+      span.setAttribute(SemanticAttributes.CONFIDENCE, result.confidence)
       span.setAttribute('textLength', result.text.length)
-      metrics.counter(SemanticMetrics.OCR_RECOGNITIONS_COUNT).add(1, { lang: options.lang })
-      metrics
-        .histogram(SemanticMetrics.OCR_CONFIDENCE)
-        .record(result.confidence, { lang: options.lang })
+      metrics.counter(Metrics.RECOGNITION_COUNT).add(1, { lang: options.lang })
+      metrics.histogram(Metrics.CONFIDENCE_SCORE).record(result.confidence, { lang: options.lang })
       logger.debug(
         { lang: options.lang, confidence: result.confidence, textLength: result.text.length },
         'OCR completed',
@@ -77,7 +76,7 @@ export async function recognizeImageWithWorker(
 ): Promise<OcrResultWithOrientation> {
   const { tracer, metrics } = obs('ocr')
 
-  return tracer.startSpan(SpanNames.OCR_RECOGNIZE_WITH_WORKER, async (span) => {
+  return tracer.startSpan(Spans.RECOGNIZE_WITH_WORKER, async (span) => {
     span.setAttribute('imageBytes', imageBuffer.length)
 
     const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS
@@ -87,9 +86,9 @@ export async function recognizeImageWithWorker(
       'OCR timed out',
     )
 
-    span.setAttribute('confidence', result.confidence)
+    span.setAttribute(SemanticAttributes.CONFIDENCE, result.confidence)
     span.setAttribute('textLength', result.text.length)
-    metrics.histogram(SemanticMetrics.OCR_CONFIDENCE).record(result.confidence)
+    metrics.histogram(Metrics.CONFIDENCE_SCORE).record(result.confidence)
 
     return result
   })

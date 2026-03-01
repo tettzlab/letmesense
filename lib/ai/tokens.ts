@@ -1,7 +1,7 @@
 /**
  * Token utilities for dynamic output limits and context management.
  *
- * Model-specific limits are derived from MODEL_REGISTRY in models.ts.
+ * Model-specific limits are derived from the model registry in models.ts.
  */
 
 import { getModel } from './models.js'

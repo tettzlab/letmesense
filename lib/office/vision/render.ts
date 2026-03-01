@@ -6,11 +6,12 @@ import { readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PDFPageProxy } from 'pdfjs-dist'
-import { obs } from '../../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../../observability/types.js'
+import { obs, SemanticAttributes } from '../../observability/index.js'
+import { throwIfAborted } from '../../pipeline/errors.js'
 import { checkLibreOffice, convertToPdf } from '../convert/libreoffice.js'
 import { LibreOfficePool } from '../convert/pool.js'
 import { OfficeVisionError } from '../errors.js'
+import { Metrics, Spans } from '../signals.js'
 import type { ContentKind } from '../types.js'
 import type { VisionOptions, VisionProgressCallback } from './types.js'
 
@@ -23,10 +24,10 @@ export const DEFAULT_MAX_DIMENSION = 1024
 
 /** Adaptive dimensions by content kind - higher for visually complex content */
 export const ADAPTIVE_DIMENSIONS: Record<ContentKind, number> = {
-  'text-rich': 800, // Lower res - OCR text is primary, image just for context
+  'text-only': 800, // Lower res - OCR text is primary, image just for context
   mixed: 1024, // Balanced - both text and images matter
-  'image-heavy': 1536, // Higher res - visual details important
-  table: 1280, // Higher res - tables/charts need clarity
+  'image-only': 1536, // Higher res - visual details important
+  tabular: 1280, // Higher res - tables/charts need clarity
   empty: 600, // Minimal - no meaningful content
   unknown: 1024, // Default to balanced
 }
@@ -103,14 +104,14 @@ export async function convertDocumentToPdf(
 ): Promise<PdfConversionResult> {
   const { tracer, metrics, logger } = obs('office.vision')
 
-  return tracer.startSpan(SpanNames.OFFICE_VISION_CONVERT_TO_PDF, async (span) => {
+  return tracer.startSpan(Spans.VISION_CONVERT_TO_PDF, async (span) => {
     const start = performance.now()
     span.setAttribute('inputPath', inputPath)
 
     // Check LibreOffice availability
     const status = checkLibreOffice()
     if (!status.available) {
-      span.setAttribute('status', 'error')
+      span.setAttribute(SemanticAttributes.STATUS, 'error')
       span.setAttribute('error', 'LibreOffice not available')
       throw new OfficeVisionError(`LibreOffice is required for vision mode. ${status.error ?? ''}`)
     }
@@ -135,17 +136,13 @@ export async function convertDocumentToPdf(
       await pdfDoc.cleanup()
 
       const durationMs = performance.now() - start
-      span.setAttribute('status', 'success')
-      span.setAttribute('pageCount', pageCount)
+      span.setAttribute(SemanticAttributes.STATUS, 'success')
+      span.setAttribute(SemanticAttributes.PAGE_COUNT, pageCount)
       span.setAttribute('pdfBytes', pdfBytes.length)
-      span.setAttribute('durationMs', Math.round(durationMs))
+      span.setAttribute(SemanticAttributes.DURATION_MS, Math.round(durationMs))
 
-      metrics
-        .counter(SemanticMetrics.OFFICE_VISION_RENDER_COUNT)
-        .add(1, { status: 'success', mode: 'pdf' })
-      metrics
-        .histogram(SemanticMetrics.OFFICE_VISION_RENDER_DURATION_MS)
-        .record(durationMs, { mode: 'pdf' })
+      metrics.counter(Metrics.VISION_RENDER_COUNT).add(1, { status: 'success', mode: 'pdf' })
+      metrics.histogram(Metrics.VISION_RENDER_DURATION_MS).record(durationMs, { mode: 'pdf' })
       logger.debug(
         { inputPath, pageCount, pdfBytes: pdfBytes.length, durationMs },
         'Document converted to PDF',
@@ -158,11 +155,9 @@ export async function convertDocumentToPdf(
       }
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      span.setAttribute('status', 'error')
+      span.setAttribute(SemanticAttributes.STATUS, 'error')
       span.recordException(error)
-      metrics
-        .counter(SemanticMetrics.OFFICE_VISION_RENDER_COUNT)
-        .add(1, { status: 'error', mode: 'pdf' })
+      metrics.counter(Metrics.VISION_RENDER_COUNT).add(1, { status: 'error', mode: 'pdf' })
       onProgress?.({ type: 'error', error })
       throw new OfficeVisionError(`Failed to convert document to PDF: ${error.message}`, error)
     } finally {
@@ -195,14 +190,14 @@ export async function renderDocumentToImages(
 ): Promise<Buffer[]> {
   const { tracer, metrics, logger } = obs('office.vision')
 
-  return tracer.startSpan(SpanNames.OFFICE_VISION_RENDER_TO_IMAGES, async (span) => {
+  return tracer.startSpan(Spans.VISION_RENDER_TO_IMAGES, async (span) => {
     const start = performance.now()
     span.setAttribute('inputPath', inputPath)
 
     // Check LibreOffice availability
     const status = checkLibreOffice()
     if (!status.available) {
-      span.setAttribute('status', 'error')
+      span.setAttribute(SemanticAttributes.STATUS, 'error')
       span.setAttribute('error', 'LibreOffice not available')
       throw new OfficeVisionError(`LibreOffice is required for vision mode. ${status.error ?? ''}`)
     }
@@ -230,10 +225,12 @@ export async function renderDocumentToImages(
       const numPages = pdfDoc.numPages
       const images: Buffer[] = []
 
-      span.setAttribute('pageCount', numPages)
+      span.setAttribute(SemanticAttributes.PAGE_COUNT, numPages)
       onProgress?.({ type: 'llm-start', totalUnits: numPages })
 
       for (let i = 0; i < numPages; i++) {
+        throwIfAborted(options.signal, 'render')
+
         const page = await pdfDoc.getPage(i + 1)
 
         // Compute adaptive scale based on content kind
@@ -250,25 +247,19 @@ export async function renderDocumentToImages(
       await pdfDoc.cleanup()
 
       const durationMs = performance.now() - start
-      span.setAttribute('status', 'success')
-      span.setAttribute('durationMs', Math.round(durationMs))
+      span.setAttribute(SemanticAttributes.STATUS, 'success')
+      span.setAttribute(SemanticAttributes.DURATION_MS, Math.round(durationMs))
 
-      metrics
-        .counter(SemanticMetrics.OFFICE_VISION_RENDER_COUNT)
-        .add(1, { status: 'success', mode: 'images' })
-      metrics
-        .histogram(SemanticMetrics.OFFICE_VISION_RENDER_DURATION_MS)
-        .record(durationMs, { mode: 'images' })
+      metrics.counter(Metrics.VISION_RENDER_COUNT).add(1, { status: 'success', mode: 'images' })
+      metrics.histogram(Metrics.VISION_RENDER_DURATION_MS).record(durationMs, { mode: 'images' })
       logger.debug({ inputPath, pageCount: numPages, durationMs }, 'Document rendered to images')
 
       return images
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
-      span.setAttribute('status', 'error')
+      span.setAttribute(SemanticAttributes.STATUS, 'error')
       span.recordException(error)
-      metrics
-        .counter(SemanticMetrics.OFFICE_VISION_RENDER_COUNT)
-        .add(1, { status: 'error', mode: 'images' })
+      metrics.counter(Metrics.VISION_RENDER_COUNT).add(1, { status: 'error', mode: 'images' })
       onProgress?.({ type: 'error', error })
       throw new OfficeVisionError(`Failed to render document to images: ${error.message}`, error)
     } finally {
@@ -316,6 +307,8 @@ export async function renderManyToImages(
     const { renderPage } = await import('../../pdf/render.js')
 
     for (let i = 0; i < pdfResults.length; i++) {
+      throwIfAborted(options.signal, 'render')
+
       const pdfPath = pdfResults[i].outputPath
       const pdfBytes = await readFile(pdfPath)
       const pdfDoc = await loadPdfDocumentFromBytes(new Uint8Array(pdfBytes))
@@ -325,6 +318,7 @@ export async function renderManyToImages(
       const contentKinds = contentKindsPerDoc?.[i]
 
       for (let j = 0; j < numPages; j++) {
+        throwIfAborted(options.signal, 'render')
         const page = await pdfDoc.getPage(j + 1)
 
         // Compute adaptive scale based on content kind

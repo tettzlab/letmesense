@@ -6,12 +6,13 @@
  */
 
 import { type Canvas, createCanvas, type SKRSContext2D } from '@napi-rs/canvas'
-
 import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { SemanticAttributes } from '../observability/types.js'
+import { throwIfAborted } from '../pipeline/errors.js'
 import { DEFAULT_OCR_RENDER_SCALE } from './constants.js'
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjs.js'
 import { asPdfjsCanvasContext } from './pdfjsTypes.js'
+import { Metrics, Spans } from './signals.js'
 
 /** Image format for rendered pages */
 export type ImageFormat = 'png' | 'jpeg'
@@ -49,19 +50,19 @@ export async function renderPage(
 ): Promise<RenderedPage> {
   const { tracer, metrics } = obs('pdf.render')
 
-  return tracer.startSpan(SpanNames.PDF_RENDER_PAGE, async (span) => {
+  return tracer.startSpan(Spans.RENDER_PAGE, async (span) => {
     const scale = options?.scale ?? DEFAULT_OCR_RENDER_SCALE
     const format = options?.format ?? 'png'
 
-    span.setAttribute('scale', scale)
-    span.setAttribute('format', format)
+    span.setAttribute(SemanticAttributes.SCALE, scale)
+    span.setAttribute(SemanticAttributes.FORMAT, format)
 
     const viewport = page.getViewport({ scale })
     const width = Math.ceil(viewport.width)
     const height = Math.ceil(viewport.height)
 
-    span.setAttribute('width', width)
-    span.setAttribute('height', height)
+    span.setAttribute(SemanticAttributes.WIDTH, width)
+    span.setAttribute(SemanticAttributes.HEIGHT, height)
 
     const canvas = createCanvas(width, height)
     const ctx = canvas.getContext('2d')
@@ -82,8 +83,8 @@ export async function renderPage(
     const dataUri = `data:${mimeType};base64,${buffer.toString('base64')}`
 
     span.setAttribute('bufferSize', buffer.length)
-    metrics.counter(SemanticMetrics.PDF_PAGES_RENDERED_COUNT).add(1, { format })
-    metrics.histogram(SemanticMetrics.PDF_RENDER_BYTES).record(buffer.length, { format })
+    metrics.counter(Metrics.PAGE_RENDER_COUNT).add(1, { format })
+    metrics.histogram(Metrics.RENDER_BYTES).record(buffer.length, { format })
 
     return { buffer, width, height, format, dataUri }
   })
@@ -164,18 +165,24 @@ export class PageRenderer {
   }
 }
 
+/** Options for rendering all pages */
+export interface RenderAllOptions extends RenderOptions {
+  /** AbortSignal for cancellation */
+  signal?: AbortSignal
+}
+
 /**
  * Render all pages of a PDF document
  */
 export async function renderAllPages(
   pdf: PDFDocumentProxy,
-  options?: RenderOptions,
+  options?: RenderAllOptions,
 ): Promise<RenderedPage[]> {
   const { tracer, metrics, logger } = obs('pdf.render')
 
-  return tracer.startSpan(SpanNames.PDF_RENDER_ALL_PAGES, async (span) => {
+  return tracer.startSpan(Spans.RENDER_ALL_PAGES, async (span) => {
     span.setAttribute('numPages', pdf.numPages)
-    span.setAttribute('scale', options?.scale ?? DEFAULT_OCR_RENDER_SCALE)
+    span.setAttribute(SemanticAttributes.SCALE, options?.scale ?? DEFAULT_OCR_RENDER_SCALE)
 
     const renderer = new PageRenderer()
     const scale = options?.scale ?? DEFAULT_OCR_RENDER_SCALE
@@ -185,6 +192,7 @@ export async function renderAllPages(
 
       const pages: RenderedPage[] = []
       for (let i = 0; i < pdf.numPages; i++) {
+        throwIfAborted(options?.signal, 'render')
         const page = await pdf.getPage(i + 1)
         const rendered = await renderer.renderPage(page, options)
         pages.push(rendered)
@@ -192,7 +200,7 @@ export async function renderAllPages(
 
       const totalBytes = pages.reduce((sum, p) => sum + p.buffer.length, 0)
       span.setAttribute('totalBytes', totalBytes)
-      metrics.histogram(SemanticMetrics.PDF_RENDER_ALL_BYTES).record(totalBytes)
+      metrics.histogram(Metrics.RENDER_ALL_BYTES).record(totalBytes)
       logger.debug({ numPages: pdf.numPages, totalBytes }, 'All pages rendered')
 
       return pages

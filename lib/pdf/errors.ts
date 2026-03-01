@@ -3,25 +3,16 @@
  * Provides a hierarchy for distinguishing different failure modes.
  */
 
-/** Phase of PDF processing where error occurred */
-export type PdfErrorPhase = 'load' | 'split' | 'extract'
+import { PipelineError, type ProcessingPhase } from '../pipeline/errors.js'
 
 /**
  * Base error class for all PDF extraction operations.
- * All PDF-related errors extend this class for easy catching.
+ * Extends PipelineError for unified catch handling.
  */
-export class PdfExtractionError extends Error {
-  /** Phase of processing where error occurred (for CLI compatibility) */
-  public readonly phase?: PdfErrorPhase
-
-  constructor(
-    message: string,
-    public readonly cause?: Error,
-    phase?: PdfErrorPhase,
-  ) {
-    super(message)
+export class PdfExtractionError extends PipelineError {
+  constructor(message: string, cause?: Error, phase?: ProcessingPhase) {
+    super(message, phase ?? 'extract', { cause, recoverable: false })
     this.name = 'PdfExtractionError'
-    this.phase = phase
   }
 }
 
@@ -42,7 +33,7 @@ export class PdfLoadError extends PdfExtractionError {
  */
 export class PdfParseError extends PdfExtractionError {
   constructor(message: string, cause?: Error) {
-    super(message, cause, 'load')
+    super(message, cause, 'parse')
     this.name = 'PdfParseError'
   }
 }
@@ -53,7 +44,7 @@ export class PdfParseError extends PdfExtractionError {
  */
 export class PdfOcrError extends PdfExtractionError {
   constructor(message: string, cause?: Error) {
-    super(message, cause, 'extract')
+    super(message, cause, 'ocr')
     this.name = 'PdfOcrError'
   }
 }

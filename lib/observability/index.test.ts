@@ -5,8 +5,6 @@
  * and factory pattern for creating observability contexts.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
 // Reset module state between tests
 let obsModule: typeof import('./index.js')
 
@@ -146,11 +144,11 @@ describe('observability module', () => {
     })
   })
 
-  describe('SpanNames', () => {
-    it('exports SpanNames constants', () => {
-      expect(obsModule.SpanNames.SESSION).toBe('session')
-      expect(obsModule.SpanNames.RUN).toBe('run')
-      expect(obsModule.SpanNames.TOOL_EXECUTION).toBe('tool.execution')
+  describe('SemanticAttributes', () => {
+    it('exports SemanticAttributes constants', () => {
+      expect(obsModule.SemanticAttributes.MODEL).toBe('model')
+      expect(obsModule.SemanticAttributes.INPUT_TOKENS).toBe('input.tokens')
+      expect(obsModule.SemanticAttributes.DURATION_MS).toBe('duration_ms')
     })
   })
 

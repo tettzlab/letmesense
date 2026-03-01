@@ -45,7 +45,7 @@ export {
   sense,
   senseStream,
   type VisionOptions,
-} from './letmesense/index.js'
+} from './sense/index.js'
 
 // ============================================================================
 // Re-exports from pipeline

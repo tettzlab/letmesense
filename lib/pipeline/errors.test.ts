@@ -1,4 +1,3 @@
-import { describe, expect, it } from 'vitest'
 import {
   AbortError,
   AnalyzeError,
@@ -40,86 +39,34 @@ describe('PipelineError', () => {
 })
 
 describe('phase-specific errors', () => {
-  it('creates LoadError', () => {
-    const err = new LoadError('file not found')
-    expect(err.name).toBe('LoadError')
-    expect(err.phase).toBe('load')
-    expect(err.recoverable).toBe(false)
+  it.each([
+    { Ctor: LoadError, phase: 'load', recoverable: false },
+    { Ctor: ParseError, phase: 'parse', recoverable: false },
+    { Ctor: AnalyzeError, phase: 'analyze', recoverable: true },
+    { Ctor: ExtractError, phase: 'extract', recoverable: true },
+    { Ctor: RenderError, phase: 'render', recoverable: true },
+    { Ctor: OcrError, phase: 'ocr', recoverable: true },
+    { Ctor: FormatError, phase: 'format', recoverable: false },
+    { Ctor: ConvertError, phase: 'convert', recoverable: false },
+  ] as const)('$Ctor.name has phase=$phase recoverable=$recoverable', ({
+    Ctor,
+    phase,
+    recoverable,
+  }) => {
+    const err = new Ctor('test')
+    expect(err.phase).toBe(phase)
+    expect(err.recoverable).toBe(recoverable)
   })
 
-  it('creates ParseError', () => {
-    const err = new ParseError('invalid format')
-    expect(err.name).toBe('ParseError')
-    expect(err.phase).toBe('parse')
-    expect(err.recoverable).toBe(false)
-  })
-
-  it('creates AnalyzeError', () => {
-    const err = new AnalyzeError('analysis failed')
-    expect(err.name).toBe('AnalyzeError')
-    expect(err.phase).toBe('analyze')
-    expect(err.recoverable).toBe(true)
-  })
-
-  it('creates ExtractError', () => {
-    const err = new ExtractError('extraction failed')
-    expect(err.name).toBe('ExtractError')
-    expect(err.phase).toBe('extract')
-    expect(err.recoverable).toBe(true)
-  })
-
-  it('creates RenderError', () => {
-    const err = new RenderError('render failed')
-    expect(err.name).toBe('RenderError')
-    expect(err.phase).toBe('render')
-    expect(err.recoverable).toBe(true)
-  })
-
-  it('creates OcrError', () => {
-    const err = new OcrError('ocr failed')
-    expect(err.name).toBe('OcrError')
-    expect(err.phase).toBe('ocr')
-    expect(err.recoverable).toBe(true)
-  })
-
-  it('creates FormatError', () => {
-    const err = new FormatError('format failed')
-    expect(err.name).toBe('FormatError')
-    expect(err.phase).toBe('format')
-    expect(err.recoverable).toBe(false)
-  })
-
-  it('creates ConvertError', () => {
-    const err = new ConvertError('conversion failed')
-    expect(err.name).toBe('ConvertError')
-    expect(err.phase).toBe('convert')
-    expect(err.recoverable).toBe(false)
-  })
-
-  it('creates NotImplementedError with feature name', () => {
-    const err = new NotImplementedError('vision extraction')
-    expect(err.name).toBe('NotImplementedError')
-    expect(err.message).toBe('Not implemented: vision extraction')
-    expect(err.phase).toBe('format') // default phase
-    expect(err.recoverable).toBe(false)
-  })
-
-  it('creates NotImplementedError with custom phase', () => {
-    const err = new NotImplementedError('custom feature', 'extract')
-    expect(err.phase).toBe('extract')
-  })
-
-  it('creates AbortError with default phase', () => {
+  it('AbortError defaults to extract phase', () => {
     const err = new AbortError()
-    expect(err.name).toBe('AbortError')
-    expect(err.message).toBe('Operation aborted')
-    expect(err.phase).toBe('extract') // default phase
+    expect(err.phase).toBe('extract')
     expect(err.recoverable).toBe(false)
   })
 
-  it('creates AbortError with custom phase', () => {
-    const err = new AbortError('analyze')
-    expect(err.phase).toBe('analyze')
+  it('NotImplementedError formats message', () => {
+    const err = new NotImplementedError('vision extraction')
+    expect(err.message).toBe('Not implemented: vision extraction')
   })
 })
 
@@ -216,6 +163,16 @@ describe('isAbortError', () => {
     expect(isAbortError(new LoadError('test'))).toBe(false)
     expect(isAbortError(new ExtractError('test'))).toBe(false)
     expect(isAbortError(new NotImplementedError('test'))).toBe(false)
+  })
+
+  it('returns true for DOMException with name AbortError', () => {
+    const domAbort = new DOMException('The operation was aborted.', 'AbortError')
+    expect(isAbortError(domAbort)).toBe(true)
+  })
+
+  it('returns false for DOMException with other name', () => {
+    const domOther = new DOMException('test', 'NotFoundError')
+    expect(isAbortError(domOther)).toBe(false)
   })
 
   it('returns false for non-pipeline errors', () => {

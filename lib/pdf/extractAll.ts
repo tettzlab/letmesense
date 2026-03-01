@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import { toTesseractLang } from '../common/languages.js'
 import { obs } from '../observability/index.js'
-import { SemanticMetrics, SpanNames } from '../observability/types.js'
+import { SemanticAttributes } from '../observability/types.js'
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
   DEFAULT_MIXED_FALLBACK_CHARS,
@@ -10,6 +10,7 @@ import {
 } from './constants.js'
 import { PdfExtractError, PdfExtractionError, PdfLoadError, PdfSplitError } from './errors.js'
 import { extractFromHomogeneousPdf } from './extractText.js'
+import { Metrics, Spans } from './signals.js'
 import { splitIntoRuns } from './splitRuns.js'
 import type { ExtractionError, PageKind, ProgressCallbacks } from './types.js'
 
@@ -163,7 +164,7 @@ export async function extractFromPdf(
 ): Promise<ExtractAllResult> {
   const { logger, tracer, metrics } = obs('pdf')
 
-  return tracer.startSpan(SpanNames.PDF_EXTRACT, async (span) => {
+  return tracer.startSpan(Spans.EXTRACT, async (span) => {
     const startTime = performance.now()
 
     const {
@@ -184,7 +185,7 @@ export async function extractFromPdf(
 
     // 1. Detect input type and load PDF bytes
     const inputType = detectInputType(input)
-    span.setAttribute('source', inputType)
+    span.setAttribute(SemanticAttributes.SOURCE, inputType)
     let pdfBytes: Uint8Array
 
     switch (inputType) {
@@ -217,15 +218,13 @@ export async function extractFromPdf(
       const result = await splitIntoRuns(pdfBytes, splitOpts)
       runs = result.runs
       pages = result.pages
-      span.setAttribute('pageCount', pages.length)
-      span.setAttribute('runCount', runs.length)
+      span.setAttribute(SemanticAttributes.PAGE_COUNT, pages.length)
+      span.setAttribute(SemanticAttributes.RUN_COUNT, runs.length)
       logger.info({ source: inputType, pageCount: pages.length }, 'Starting PDF extraction')
     } catch (err) {
       span.recordException(err instanceof Error ? err : new Error(String(err)))
       span.setError('Failed to split PDF into runs')
-      metrics
-        .counter(SemanticMetrics.PDF_EXTRACTIONS_COUNT)
-        .add(1, { status: 'failure', source: inputType })
+      metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'failure', source: inputType })
       logger.error({ err }, 'PDF extraction failed during split')
       throw new PdfSplitError(
         'Failed to split PDF into runs',
@@ -283,7 +282,7 @@ export async function extractFromPdf(
       // Remap page indices from run-local to document-global
       const remappedErrors = runResult.errors.map((e) => ({
         ...e,
-        pageIndex: task.run.pageIndices[e.pageIndex],
+        unitIndex: task.run.pageIndices[e.unitIndex],
       }))
 
       return {
@@ -331,8 +330,8 @@ export async function extractFromPdf(
             runIndex: task.runIndex,
             run: task.run,
             text: '',
-            errors: task.run.pageIndices.map((pageIndex) => ({
-              pageIndex,
+            errors: task.run.pageIndices.map((unitIndex) => ({
+              unitIndex,
               phase: 'extract' as const,
               message: error.message,
             })),
@@ -360,8 +359,8 @@ export async function extractFromPdf(
             runIndex: task.runIndex,
             run: task.run,
             text: '',
-            errors: task.run.pageIndices.map((pageIndex) => ({
-              pageIndex,
+            errors: task.run.pageIndices.map((unitIndex) => ({
+              unitIndex,
               phase: 'extract' as const,
               message: error.message,
             })),
@@ -421,10 +420,8 @@ export async function extractFromPdf(
 
     // 4. Check strict mode
     if (strictMode && allErrors.length > 0) {
-      const pageList = allErrors.map((e) => e.pageIndex + 1).join(', ')
-      metrics
-        .counter(SemanticMetrics.PDF_EXTRACTIONS_COUNT)
-        .add(1, { status: 'failure', source: inputType })
+      const pageList = allErrors.map((e) => e.unitIndex + 1).join(', ')
+      metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'failure', source: inputType })
       logger.error(
         { errorCount: allErrors.length, pageList },
         'PDF extraction failed in strict mode',
@@ -453,18 +450,12 @@ export async function extractFromPdf(
     }
 
     // Record success metrics
-    metrics
-      .counter(SemanticMetrics.PDF_EXTRACTIONS_COUNT)
-      .add(1, { status: 'success', source: inputType })
-    metrics
-      .histogram(SemanticMetrics.PDF_EXTRACTION_DURATION_MS)
-      .record(performance.now() - startTime)
+    metrics.counter(Metrics.EXTRACTION_COUNT).add(1, { status: 'success', source: inputType })
+    metrics.histogram(Metrics.EXTRACTION_DURATION_MS).record(performance.now() - startTime)
 
     // Record page kind metrics
     for (const run of runs) {
-      metrics
-        .counter(SemanticMetrics.PDF_PAGES_COUNT)
-        .add(run.pageIndices.length, { kind: run.attrs.kind })
+      metrics.counter(Metrics.PAGE_COUNT).add(run.pageIndices.length, { kind: run.attrs.kind })
     }
 
     if (allErrors.length > 0) {
