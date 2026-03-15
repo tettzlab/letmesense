@@ -5,10 +5,12 @@
 
 // Import and re-export shared types
 import type { Lang } from '../common/types.js'
+
 export type { Lang }
 
 // Use canonical ContentKind from pipeline
 import type { ContentKind } from '../pipeline/types.js'
+
 export type { ContentKind }
 
 // ============================================================================

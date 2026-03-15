@@ -367,9 +367,12 @@ export class PinoOtelObservabilityFactory implements ObservabilityFactory {
             level: config.logLevel ?? 'info',
           })
         }
-      } catch {
-        // In test environments, import.meta.url may not be a file:// URL
-        // Skip the OTEL log transport in such cases
+      } catch (err) {
+        // In test environments, import.meta.url may not be a file:// URL,
+        // which causes fileURLToPath to throw a TypeError — expected, skip silently.
+        if (!(err instanceof TypeError)) {
+          console.error('[observability] Unexpected error resolving OTel log transport path:', err)
+        }
       }
     }
 

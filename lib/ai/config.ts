@@ -92,7 +92,7 @@ export type ProviderOptions = Record<string, Record<string, JsonValue>>
 export interface FormatRequest {
   /** Extracted text to format */
   text: string
-  /** Image as base64 data URI (for vision mode, image-only providers) */
+  /** Base64-encoded image data (for vision mode) */
   image?: string
   /** PDF bytes (for PDF-capable providers like Anthropic/Google) */
   pdf?: Buffer
@@ -210,6 +210,7 @@ export function getModels(): Record<
     anthropic: getModelsByProvider('anthropic').map((m) => ({ id: m.id, name: m.name })),
     google: getModelsByProvider('google').map((m) => ({ id: m.id, name: m.name })),
     ollama: getModelsByProvider('ollama').map((m) => ({ id: m.id, name: m.name })),
+    azure: getModelsByProvider('azure').map((m) => ({ id: m.id, name: m.name })),
   }
 }
 
@@ -234,6 +235,7 @@ export function getFreeTierModelsByProvider(): Readonly<
     anthropic: models.anthropic.filter((m) => isFreeTierModel(m.id)),
     google: models.google.filter((m) => isFreeTierModel(m.id)),
     ollama: models.ollama.filter((m) => isFreeTierModel(m.id)),
+    azure: models.azure.filter((m) => isFreeTierModel(m.id)),
   }
 }
 
@@ -289,6 +291,7 @@ export function getModelAliases(): Record<ProviderId, Record<string, string>> {
     anthropic: buildAliasMap('anthropic'),
     google: buildAliasMap('google'),
     ollama: buildAliasMap('ollama'),
+    azure: buildAliasMap('azure'),
   }
 }
 

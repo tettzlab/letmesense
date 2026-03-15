@@ -1,3 +1,4 @@
+import { _resetRegistryCache } from './models.js'
 import {
   buildConfig,
   detectProvider,
@@ -8,6 +9,9 @@ import {
   resolveProvider,
 } from './provider.js'
 import { buildProviderOptions } from './providerOptions.js'
+
+beforeAll(() => _resetRegistryCache())
+
 import { resolveModel } from './resolve.js'
 import type { LlmProvider, ModelPricing } from './types.js'
 

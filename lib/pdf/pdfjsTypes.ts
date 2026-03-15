@@ -17,6 +17,7 @@ export interface PdfjsDocumentInitParameters {
   standardFontDataUrl?: string
   cMapUrl?: string
   cMapPacked?: boolean
+  wasmUrl?: string
 }
 
 /**

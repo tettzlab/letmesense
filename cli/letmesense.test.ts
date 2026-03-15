@@ -81,11 +81,11 @@ describe('letmesense CLI (unified wrapper)', () => {
     expect(output.length).toBeGreaterThan(0)
   }, 15000)
 
-  test('no arguments shows error', async () => {
+  test('no arguments shows help', async () => {
     const result = await runCli([])
-    // Commander requires the <input> argument, so exit 1 with error
-    expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain("missing required argument 'input'")
+    // With optional [input], no-arg invocation shows help and exits 0
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('Usage:')
   }, 15000)
 
   // Consolidated: PDF file processing (single subprocess)

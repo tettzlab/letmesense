@@ -1,6 +1,7 @@
 import { type ChildProcess, execSync, spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 // Note: afterAll is used in getInstallInstructions test
@@ -19,12 +20,14 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }))
 
-// Mock fs existsSync - need both named and default export
+// Mock fs existsSync and statSync - need both named and default export
 vi.mock('node:fs', () => {
   const existsSyncMock = vi.fn()
+  const statSyncMock = vi.fn()
   return {
-    default: { existsSync: existsSyncMock },
+    default: { existsSync: existsSyncMock, statSync: statSyncMock },
     existsSync: existsSyncMock,
+    statSync: statSyncMock,
   }
 })
 
@@ -34,10 +37,64 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return {
     ...actual,
     mkdir: vi.fn().mockResolvedValue(undefined),
+    mkdtemp: vi.fn().mockResolvedValue('/tmp/lo-profile-abc123'),
+    rm: vi.fn().mockResolvedValue(undefined),
   }
 })
 
 describe('findLibreOffice', () => {
+  describe('LIBREOFFICE_PATH env var override', () => {
+    const savedLibreOfficePath = process.env.LIBREOFFICE_PATH
+
+    afterEach(() => {
+      if (savedLibreOfficePath === undefined) {
+        delete process.env.LIBREOFFICE_PATH
+      } else {
+        process.env.LIBREOFFICE_PATH = savedLibreOfficePath
+      }
+      vi.mocked(existsSync).mockReset()
+      vi.mocked(statSync).mockReset()
+      vi.mocked(execSync).mockReset()
+    })
+
+    it('returns LIBREOFFICE_PATH when set to a valid file path', () => {
+      process.env.LIBREOFFICE_PATH = '/custom/path/to/libreoffice'
+      vi.mocked(existsSync).mockReturnValue(true)
+      vi.mocked(statSync).mockReturnValue({ isFile: () => true, isDirectory: () => false } as any)
+
+      const result = findLibreOffice()
+
+      expect(result).toBe('/custom/path/to/libreoffice')
+      expect(existsSync).toHaveBeenCalledWith('/custom/path/to/libreoffice')
+      expect(statSync).toHaveBeenCalledWith('/custom/path/to/libreoffice')
+    })
+
+    it('falls through when LIBREOFFICE_PATH points to a nonexistent path', () => {
+      process.env.LIBREOFFICE_PATH = '/nonexistent/libreoffice'
+      vi.mocked(existsSync).mockReturnValue(false)
+      vi.mocked(execSync).mockImplementation(() => {
+        throw new Error('not found')
+      })
+
+      const result = findLibreOffice()
+
+      expect(result).toBeNull()
+    })
+
+    it('falls through when LIBREOFFICE_PATH points to a directory', () => {
+      process.env.LIBREOFFICE_PATH = '/usr/lib/libreoffice'
+      vi.mocked(existsSync).mockImplementation((p) => p === '/usr/lib/libreoffice')
+      vi.mocked(statSync).mockReturnValue({ isFile: () => false, isDirectory: () => true } as any)
+      vi.mocked(execSync).mockImplementation(() => {
+        throw new Error('not found')
+      })
+
+      const result = findLibreOffice()
+
+      expect(result).toBeNull()
+    })
+  })
+
   it('returns executable path when found via which/where', () => {
     vi.mocked(execSync).mockReturnValueOnce('/usr/bin/libreoffice\n')
 
@@ -63,16 +120,16 @@ describe('findLibreOffice', () => {
   })
 
   it('checks absolute paths with existsSync', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
     vi.mocked(execSync).mockImplementation(() => {
       throw new Error('not found')
     })
-    vi.mocked(existsSync).mockImplementation(
-      (p) => p === '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-    )
+    // Use a Linux absolute path — platform is explicitly mocked above
+    vi.mocked(existsSync).mockImplementation((p) => p === '/usr/bin/libreoffice')
 
     const result = findLibreOffice()
 
-    expect(result).toBe('/Applications/LibreOffice.app/Contents/MacOS/soffice')
+    expect(result).toBe('/usr/bin/libreoffice')
   })
 
   it('returns null when LibreOffice not found', () => {
@@ -194,6 +251,7 @@ describe('convertToPdf', () => {
       expect.arrayContaining([
         '--headless',
         '--invisible',
+        '-env:UserInstallation=file:///tmp/lo-profile-abc123',
         '--convert-to',
         'pdf',
         '--outdir',
@@ -272,6 +330,190 @@ describe('convertToPdf', () => {
     }, 10)
 
     await expect(convertPromise).rejects.toThrow('conversion failed')
+  })
+
+  it('creates an isolated profile directory via mkdtemp', async () => {
+    vi.mocked(execSync)
+      .mockReturnValueOnce('/usr/bin/libreoffice\n')
+      .mockReturnValueOnce('LibreOffice 7.6.0\n')
+    vi.mocked(existsSync).mockReturnValue(true)
+
+    const mockProcess = new EventEmitter() as ChildProcess & EventEmitter
+    mockProcess.stdout = new EventEmitter() as any
+    mockProcess.stderr = new EventEmitter() as any
+    mockProcess.kill = vi.fn()
+    vi.mocked(spawn).mockReturnValue(mockProcess)
+
+    const convertPromise = convertToPdf(testFile)
+    setTimeout(() => mockProcess.emit('close', 0), 10)
+    await convertPromise
+
+    expect(mkdtemp).toHaveBeenCalledWith(expect.stringContaining('lo-profile-'))
+  })
+
+  it('cleans up profile directory on successful conversion', async () => {
+    vi.mocked(execSync)
+      .mockReturnValueOnce('/usr/bin/libreoffice\n')
+      .mockReturnValueOnce('LibreOffice 7.6.0\n')
+    vi.mocked(existsSync).mockReturnValue(true)
+
+    const mockProcess = new EventEmitter() as ChildProcess & EventEmitter
+    mockProcess.stdout = new EventEmitter() as any
+    mockProcess.stderr = new EventEmitter() as any
+    mockProcess.kill = vi.fn()
+    vi.mocked(spawn).mockReturnValue(mockProcess)
+
+    const convertPromise = convertToPdf(testFile)
+    setTimeout(() => mockProcess.emit('close', 0), 10)
+    await convertPromise
+
+    expect(rm).toHaveBeenCalledWith('/tmp/lo-profile-abc123', {
+      recursive: true,
+      force: true,
+    })
+  })
+
+  it('cleans up profile directory on spawn error', async () => {
+    vi.mocked(execSync)
+      .mockReturnValueOnce('/usr/bin/libreoffice\n')
+      .mockReturnValueOnce('LibreOffice 7.6.0\n')
+    vi.mocked(existsSync).mockReturnValue(true)
+
+    const mockProcess = new EventEmitter() as ChildProcess & EventEmitter
+    mockProcess.stdout = new EventEmitter() as any
+    mockProcess.stderr = new EventEmitter() as any
+    mockProcess.kill = vi.fn()
+    vi.mocked(spawn).mockReturnValue(mockProcess)
+
+    const convertPromise = convertToPdf(testFile)
+    setTimeout(() => mockProcess.emit('error', new Error('spawn failed')), 10)
+
+    await expect(convertPromise).rejects.toThrow('spawn failed')
+    expect(rm).toHaveBeenCalledWith('/tmp/lo-profile-abc123', {
+      recursive: true,
+      force: true,
+    })
+  })
+
+  it('cleans up profile directory on timeout', async () => {
+    vi.mocked(execSync)
+      .mockReturnValueOnce('/usr/bin/libreoffice\n')
+      .mockReturnValueOnce('LibreOffice 7.6.0\n')
+    vi.mocked(existsSync).mockReturnValue(true)
+
+    const mockProcess = new EventEmitter() as ChildProcess & EventEmitter
+    mockProcess.stdout = new EventEmitter() as any
+    mockProcess.stderr = new EventEmitter() as any
+    mockProcess.kill = vi.fn()
+    vi.mocked(spawn).mockReturnValue(mockProcess)
+
+    const convertPromise = convertToPdf(testFile, { timeout: 50 })
+
+    await expect(convertPromise).rejects.toThrow('timed out')
+    expect(rm).toHaveBeenCalledWith('/tmp/lo-profile-abc123', {
+      recursive: true,
+      force: true,
+    })
+  })
+
+  it('retries on transient macOS Task policy error', async () => {
+    // First two calls: LibreOffice fails with Task policy error
+    // Third call: succeeds
+    let callCount = 0
+
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      const cmdStr = String(cmd)
+      if (cmdStr.includes('--version')) return 'LibreOffice 7.6.0\n' as any
+      return '/usr/bin/libreoffice\n' as any
+    })
+    vi.mocked(existsSync).mockReturnValue(true)
+
+    vi.mocked(spawn).mockImplementation(() => {
+      callCount++
+      const proc = new EventEmitter() as ChildProcess & EventEmitter
+      proc.stdout = new EventEmitter() as any
+      proc.stderr = new EventEmitter() as any
+      proc.kill = vi.fn()
+
+      setTimeout(() => {
+        if (callCount <= 2) {
+          ;(proc.stderr as EventEmitter).emit(
+            'data',
+            'Task policy set failed: 4 ((os/kern) invalid argument)',
+          )
+          proc.emit('close', 1)
+        } else {
+          proc.emit('close', 0)
+        }
+      }, 10)
+
+      return proc
+    })
+
+    const result = await convertToPdf(testFile, { outputDir: tmpDir })
+    expect(callCount).toBe(3)
+    expect(result.inputPath).toBe(testFile)
+  })
+
+  it('gives up after exhausting retries on transient error', async () => {
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      const cmdStr = String(cmd)
+      if (cmdStr.includes('--version')) return 'LibreOffice 7.6.0\n' as any
+      return '/usr/bin/libreoffice\n' as any
+    })
+    vi.mocked(existsSync).mockImplementation((p) => {
+      return String(p).endsWith('.pptx')
+    })
+
+    vi.mocked(spawn).mockImplementation(() => {
+      const proc = new EventEmitter() as ChildProcess & EventEmitter
+      proc.stdout = new EventEmitter() as any
+      proc.stderr = new EventEmitter() as any
+      proc.kill = vi.fn()
+
+      setTimeout(() => {
+        ;(proc.stderr as EventEmitter).emit(
+          'data',
+          'Task policy set failed: 4 ((os/kern) invalid argument)',
+        )
+        proc.emit('close', 1)
+      }, 10)
+
+      return proc
+    })
+
+    await expect(convertToPdf(testFile, { retries: 1 })).rejects.toThrow('Task policy set failed')
+  })
+
+  it('does not retry non-transient errors', async () => {
+    let callCount = 0
+
+    vi.mocked(execSync).mockImplementation((cmd) => {
+      const cmdStr = String(cmd)
+      if (cmdStr.includes('--version')) return 'LibreOffice 7.6.0\n' as any
+      return '/usr/bin/libreoffice\n' as any
+    })
+    vi.mocked(existsSync).mockImplementation((p) => {
+      return String(p).endsWith('.pptx')
+    })
+
+    vi.mocked(spawn).mockImplementation(() => {
+      callCount++
+      const proc = new EventEmitter() as ChildProcess & EventEmitter
+      proc.stdout = new EventEmitter() as any
+      proc.stderr = new EventEmitter() as any
+      proc.kill = vi.fn()
+
+      setTimeout(() => {
+        ;(proc.stderr as EventEmitter).emit('data', 'Fatal error: corrupt file')
+        proc.emit('close', 1)
+      }, 10)
+
+      return proc
+    })
+
+    await expect(convertToPdf(testFile)).rejects.toThrow('corrupt file')
+    expect(callCount).toBe(1)
   })
 })
 

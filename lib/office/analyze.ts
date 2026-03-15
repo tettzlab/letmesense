@@ -142,8 +142,11 @@ function analyzeSheet(
   const rowCount = data.length
   const columnCount = data.length > 0 ? Math.max(...data.map((row) => row.length)) : 0
 
-  // Check for formulas (would need raw content)
-  const hasFormulas = false // TODO: detect from raw XML if available
+  // hasFormulas is always false: OfficeParser does not expose formula strings in its
+  // AST nodes even with includeRawContent enabled. Formula detection would require
+  // direct xlsx XML parsing (e.g. reading <f> elements from xl/worksheets/*.xml),
+  // which is outside the current scope of this library wrapper.
+  const hasFormulas = false
 
   const sheetName = (node.metadata?.sheetName as string) ?? `Sheet${index + 1}`
 

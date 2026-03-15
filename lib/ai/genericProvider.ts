@@ -73,7 +73,8 @@ function buildMessages(request: FormatRequest, model: string, vision: boolean) {
         role: 'user' as const,
         content: [
           { type: 'text' as const, text: prompt },
-          { type: 'image' as const, image: request.image },
+          // Vercel AI SDK image part expects Buffer, not base64 string
+          { type: 'image' as const, image: Buffer.from(request.image, 'base64') },
         ],
       },
     ]
@@ -160,7 +161,10 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           metrics
             .counter(Metrics.REQUEST_COUNT)
             .add(1, { provider: providerId, model, status: 'error' })
-          throw parseApiError(retryResult.error, providerLabel)
+          throw parseApiError(
+            retryResult.error ?? new Error('Unknown error after retry exhaustion'),
+            providerLabel,
+          )
         }
 
         const result = retryResult.result
@@ -349,7 +353,10 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           metrics
             .counter(Metrics.REQUEST_COUNT)
             .add(1, { provider: providerId, model, status: 'error', streaming: 'true' })
-          throw parseApiError(retryResult.error, providerLabel)
+          throw parseApiError(
+            retryResult.error ?? new Error('Unknown error after retry exhaustion'),
+            providerLabel,
+          )
         }
 
         const { inputTokens, outputTokens } = retryResult.result.usage

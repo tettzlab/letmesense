@@ -6,6 +6,7 @@
 import { DEFAULT_PAGE_TIMEOUT_MS } from '../common/timeouts.js'
 import { obs, SemanticAttributes } from '../observability/index.js'
 import { requiresOcr } from './classify.js'
+import { OfficeExtractError } from './errors.js'
 import {
   type ContentNode,
   extractTextFromNodes,
@@ -175,11 +176,15 @@ export function extractSingleUnit(
     const needsOcr = requiresOcr(kind)
 
     if (needsOcr && !opts.ocr) {
-      return { unitIndex, text: '[Image content - OCR required]' }
+      throw new OfficeExtractError(
+        `Unit ${unitIndex} contains image content that requires OCR, but OCR is disabled`,
+      )
     }
 
     if (needsOcr && opts.ocr) {
-      return { unitIndex, text: '[Image content - OCR not yet implemented]' }
+      throw new OfficeExtractError(
+        `Unit ${unitIndex} contains image content but OCR extraction is not yet implemented for Office formats`,
+      )
     }
 
     const text = extractFromUnit(node, format, opts)
@@ -260,22 +265,15 @@ export async function extractText(
         const needsOcr = requiresOcr(attr.kind)
 
         if (needsOcr && !opts.ocr) {
-          // Skip OCR-required units when OCR is disabled
-          results.push({
-            unitIndex,
-            text: `[Image content - OCR required]`,
-          })
-          continue
+          throw new OfficeExtractError(
+            `Unit ${unitIndex} contains image content that requires OCR, but OCR is disabled`,
+          )
         }
 
         if (needsOcr && opts.ocr) {
-          // TODO: Implement OCR for embedded images
-          // For now, return placeholder
-          results.push({
-            unitIndex,
-            text: `[Image content - OCR not yet implemented]`,
-          })
-          continue
+          throw new OfficeExtractError(
+            `Unit ${unitIndex} contains image content but OCR extraction is not yet implemented for Office formats`,
+          )
         }
 
         // Extract text directly

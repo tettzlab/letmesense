@@ -1,0 +1,10 @@
+# Safety net — "files" in package.json is the primary whitelist.
+# This only exists to catch secrets if "files" is ever misconfigured.
+
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json

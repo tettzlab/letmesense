@@ -45,6 +45,17 @@ import type {
 } from '../pipeline/types.js'
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/**
+ * Experiment name used to gate journal callbacks inside the vision pipeline.
+ * Any non-empty string enables journaling; '_api' marks calls originating from
+ * the sense() / senseStream() API layer.
+ */
+const VISION_JOURNAL_EXPERIMENT = '_api'
+
+// ============================================================================
 // Options Types
 // ============================================================================
 
@@ -344,25 +355,24 @@ function ensureModelsConfigured(options: SenseOptions): void {
   }
 }
 
-let _pluginsLoaded = false
-let _providersLoaded = false
+let _pluginsPromise: Promise<void> | undefined
+let _providersPromise: Promise<void> | undefined
 
 async function ensurePluginsLoaded(): Promise<void> {
-  if (_pluginsLoaded) return
-  await Promise.all([
+  _pluginsPromise ??= Promise.all([
     import('../formats/pdf/index.js'),
     import('../formats/office/index.js'),
     import('../formats/image/index.js'),
     import('../formats/web/index.js'),
-  ])
-  _pluginsLoaded = true
+  ]).then(() => {})
+  return _pluginsPromise
 }
 
 async function ensureProvidersLoaded(): Promise<void> {
-  if (_providersLoaded) return
-  const { registerAllProviders } = await import('../ai/bootstrap.js')
-  registerAllProviders()
-  _providersLoaded = true
+  _providersPromise ??= import('../ai/bootstrap.js').then(({ registerAllProviders }) => {
+    registerAllProviders()
+  })
+  return _providersPromise
 }
 
 function normalizeLlmOptions(opt: boolean | LlmOptions | undefined): LlmOptions | undefined {
@@ -481,13 +491,17 @@ export async function sense(
     let totalCost: CostInfo = { total: 0 }
 
     const wrappedJournal: JournalCallback = async (entry: JournalEntry) => {
+      options.signal?.throwIfAborted()
       totalInputTokens += entry.tokens.input
       totalOutputTokens += entry.tokens.output
       totalCost = {
         total: totalCost.total + entry.cost.total,
         input: (totalCost.input ?? 0) + (entry.cost.input ?? 0),
         output: (totalCost.output ?? 0) + (entry.cost.output ?? 0),
-        cached: (totalCost.cached ?? 0) + (entry.cost.cached ?? 0) || undefined,
+        cached:
+          totalCost.cached !== undefined || entry.cost.cached !== undefined
+            ? (totalCost.cached ?? 0) + (entry.cost.cached ?? 0)
+            : undefined,
       }
       if (options.onJournal) await options.onJournal(entry)
     }
@@ -567,7 +581,13 @@ export async function sense(
     // Load custom prompt
     let promptTemplate: string | undefined
     if (llmOpts.promptFile) {
-      promptTemplate = await fs.readFile(llmOpts.promptFile, 'utf-8')
+      try {
+        promptTemplate = await fs.readFile(llmOpts.promptFile, 'utf-8')
+      } catch (err) {
+        throw new Error(
+          `Cannot read prompt file '${llmOpts.promptFile}': ${(err as Error).message}`,
+        )
+      }
     } else if (llmOpts.prompt) {
       promptTemplate = `${llmOpts.prompt}\n\n{text}`
     }
@@ -693,7 +713,13 @@ export async function* senseStream(
   let systemPrompt = visionOpts.prompt
   if (!systemPrompt && visionOpts.promptFile) {
     const fs = await import('node:fs/promises')
-    systemPrompt = await fs.readFile(visionOpts.promptFile, 'utf-8')
+    try {
+      systemPrompt = await fs.readFile(visionOpts.promptFile, 'utf-8')
+    } catch (err) {
+      throw new Error(
+        `Cannot read prompt file '${visionOpts.promptFile}': ${(err as Error).message}`,
+      )
+    }
   }
 
   const processor = new PipelineProcessor()
@@ -707,8 +733,8 @@ export async function* senseStream(
     usePlaywright: visionOpts.playwright,
     onJournal: options.onJournal,
     // The vision pipeline gates journaling on experiment being truthy.
-    // Default to '_api' so onJournal fires for cost/token tracking.
-    experiment: options.onJournal ? '_api' : undefined,
+    // Default to VISION_JOURNAL_EXPERIMENT so onJournal fires for cost/token tracking.
+    experiment: options.onJournal ? VISION_JOURNAL_EXPERIMENT : undefined,
   })
 }
 

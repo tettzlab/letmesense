@@ -2,14 +2,14 @@
 
 /**
  * Generate test fixture files for CLI tests.
- * Run with: npx tsx cli/fixtures/generate-fixtures.ts
+ * Run with: npx tsx lib/office/fixtures/generate-fixtures.ts
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
+import ExcelJS from 'exceljs'
 import PDFDocument from 'pdfkit'
-import * as XLSX from 'xlsx'
 
 const FIXTURES_DIR = path.dirname(new URL(import.meta.url).pathname)
 
@@ -58,43 +58,40 @@ function generatePdf(): Promise<void> {
 // ============================================================================
 // XLSX - Spreadsheet with multiple sheets
 // ============================================================================
-function generateXlsx(): void {
-  const workbook = XLSX.utils.book_new()
+async function generateXlsx(): Promise<void> {
+  const workbook = new ExcelJS.Workbook()
 
   // Sheet 1: Simple data with headers
-  const sheet1Data = [
+  const sheet1 = workbook.addWorksheet('Users')
+  sheet1.addRows([
     ['Name', 'Age', 'City', 'Score'],
     ['Alice', 28, 'New York', 95.5],
     ['Bob', 34, 'Los Angeles', 87.2],
     ['Charlie', 22, 'Chicago', 91.8],
     ['Diana', 45, 'Houston', 78.3],
-  ]
-  const sheet1 = XLSX.utils.aoa_to_sheet(sheet1Data)
-  XLSX.utils.book_append_sheet(workbook, sheet1, 'Users')
+  ])
 
   // Sheet 2: Financial data
-  const sheet2Data = [
+  const sheet2 = workbook.addWorksheet('Financials')
+  sheet2.addRows([
     ['Quarter', 'Revenue', 'Expenses', 'Profit'],
     ['Q1 2024', 150000, 120000, 30000],
     ['Q2 2024', 175000, 130000, 45000],
     ['Q3 2024', 200000, 145000, 55000],
     ['Q4 2024', 225000, 160000, 65000],
-  ]
-  const sheet2 = XLSX.utils.aoa_to_sheet(sheet2Data)
-  XLSX.utils.book_append_sheet(workbook, sheet2, 'Financials')
+  ])
 
   // Sheet 3: Mixed content
-  const sheet3Data = [
+  const sheet3 = workbook.addWorksheet('MixedContent')
+  sheet3.addRows([
     ['Description', 'Value', 'Notes'],
     ['Unicode Test', 'こんにちは', 'Japanese greeting'],
     ['Special Chars', '<>&"\'', 'XML entities'],
     ['Numbers', 12345.67, 'Decimal value'],
     ['Empty Cell', null, 'Has null'],
-  ]
-  const sheet3 = XLSX.utils.aoa_to_sheet(sheet3Data)
-  XLSX.utils.book_append_sheet(workbook, sheet3, 'MixedContent')
+  ])
 
-  XLSX.writeFile(workbook, path.join(FIXTURES_DIR, 'sample.xlsx'))
+  await workbook.xlsx.writeFile(path.join(FIXTURES_DIR, 'sample.xlsx'))
 }
 
 // ============================================================================
@@ -463,7 +460,7 @@ async function main() {
   console.log('  ✓ sample.pdf')
 
   console.log('Generating XLSX...')
-  generateXlsx()
+  await generateXlsx()
   console.log('  ✓ sample.xlsx')
 
   console.log('Generating DOCX...')

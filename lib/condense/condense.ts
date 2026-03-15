@@ -39,6 +39,11 @@ import {
 
 const { logger, tracer, metrics } = obs('condense')
 
+/** Ratio (%) below which "high compression" map prompts are used. */
+const RATIO_HIGH_THRESHOLD = 10
+/** Ratio (%) below which "medium compression" map prompts are used. */
+const RATIO_MEDIUM_THRESHOLD = 50
+
 /**
  * Forward explicit model-registry options to initModelRegistry().
  * If neither is set, loadModelsJson() handles env vars and ./models.json fallback.
@@ -133,6 +138,7 @@ export async function condense(text: string, options: CondenseOptions): Promise<
     }
     const cost: CondenseCost = { total: 0, map: 0, reduce: 0 }
     let success = false
+    let passthrough = false
 
     /** Set final span attrs and emit the summary log. */
     function logCompletion(outputTokens: number): void {
@@ -164,6 +170,8 @@ export async function condense(text: string, options: CondenseOptions): Promise<
       if (inputTokens <= targetTokens) {
         logger.info({ inputTokens, targetTokens }, 'Input fits target — passthrough')
         success = true
+        passthrough = true
+        span.setAttribute('passthrough', true)
         logCompletion(inputTokens)
         options.onProgress?.({ phase: 'done', ratio: 1 })
         return buildResult(text, text, resolved, usage, cost, true)
@@ -178,6 +186,12 @@ export async function condense(text: string, options: CondenseOptions): Promise<
           ),
           resolved.maxOutputTokens,
         )
+
+      if (options.maxChunkTokens != null && options.maxChunkTokens >= resolved.contextWindow) {
+        throw new Error(
+          `maxChunkTokens (${options.maxChunkTokens}) must be less than model context window (${resolved.contextWindow}) to leave room for prompts and output`,
+        )
+      }
 
       const chunkSizeSource = options.maxChunkTokens != null ? 'user-override' : 'auto'
       span.setAttribute('chunk.max.tokens', maxChunkTokens)
@@ -198,6 +212,19 @@ export async function condense(text: string, options: CondenseOptions): Promise<
       const strategy = options.chunkStrategy ?? 'heading'
       const overlapTokens = options.overlapTokens ?? DEFAULT_OVERLAP_TOKENS
       const chunks = chunkMarkdown(text, maxChunkTokens, strategy, overlapTokens, countTokens)
+
+      if (chunks.length === 0) {
+        logger.warn(
+          { strategy, maxChunkTokens },
+          'Chunking produced no chunks — returning passthrough',
+        )
+        success = true
+        passthrough = true
+        span.setAttribute('passthrough', true)
+        logCompletion(inputTokens)
+        options.onProgress?.({ phase: 'done', ratio: 1 })
+        return buildResult(text, text, resolved, usage, cost, true)
+      }
 
       logger.info(
         {
@@ -224,16 +251,16 @@ export async function condense(text: string, options: CondenseOptions): Promise<
       const promptLevel =
         options.mapSystemPrompt != null
           ? 'custom'
-          : targetRatioPercent < 10
+          : targetRatioPercent < RATIO_HIGH_THRESHOLD
             ? 'high'
-            : targetRatioPercent < 50
+            : targetRatioPercent < RATIO_MEDIUM_THRESHOLD
               ? 'medium'
               : 'low'
       const mapSystemPrompt =
         options.mapSystemPrompt ??
-        (targetRatioPercent < 10
+        (targetRatioPercent < RATIO_HIGH_THRESHOLD
           ? MAP_SYSTEM_PROMPT_HIGH
-          : targetRatioPercent < 50
+          : targetRatioPercent < RATIO_MEDIUM_THRESHOLD
             ? MAP_SYSTEM_PROMPT_MEDIUM
             : MAP_SYSTEM_PROMPT_LOW)
       const mapUserPrompt = options.mapUserPrompt ?? MAP_USER_PROMPT
@@ -352,13 +379,13 @@ export async function condense(text: string, options: CondenseOptions): Promise<
             'Reduce round starting',
           )
 
-          // Re-chunk if current text exceeds context window
+          // Re-chunk if current text exceeds max chunk size
           let reduceInput: string
           if (needsRechunk) {
             const reduceChunks = chunkMarkdown(current, maxChunkTokens, 'paragraph', 0, countTokens)
             logger.debug(
               { depth, reduceChunkCount: reduceChunks.length },
-              'Reduce round re-chunked (text exceeds context)',
+              'Reduce round re-chunked (text exceeds max chunk size)',
             )
             // Reduce each chunk, then concatenate
             const reducedParts: string[] = []
@@ -451,7 +478,7 @@ export async function condense(text: string, options: CondenseOptions): Promise<
       options.onProgress?.({ phase: 'done', ratio: current.length / text.length })
       return buildResult(text, current, resolved, usage, cost, false)
     } finally {
-      recordFinalMetrics(usage, cost, startMs, success)
+      recordFinalMetrics(usage, cost, startMs, success, passthrough)
     }
   })
 }
@@ -480,7 +507,9 @@ function resolveTarget(target: CondenseOptions['target'], inputTokens: number): 
   if (target.ratio != null) {
     return Math.ceil(inputTokens * target.ratio)
   }
-  throw new Error('CondenseTarget must specify maxChars, maxTokens, or ratio')
+  throw new Error(
+    `CondenseTarget must specify maxChars, maxTokens, or ratio — got: ${JSON.stringify(target)}`,
+  )
 }
 
 function buildResult(
@@ -539,7 +568,13 @@ async function callLlm(
       retryOpts,
     )
 
-    if (!result.success || !result.result) throw result.error ?? new Error(`${phase} call failed`)
+    if (!result.success || !result.result)
+      throw (
+        result.error ??
+        new Error(
+          `${phase} call failed after ${result.attempts} attempt(s) (${result.finalCategory})`,
+        )
+      )
 
     const r = result.result
     const inTok = r.usage.inputTokens ?? 0
@@ -566,9 +601,10 @@ function recordFinalMetrics(
   cost: CondenseCost,
   startMs: number,
   success: boolean,
+  passthrough: boolean,
 ): void {
   const status = success ? 'success' : 'error'
-  metrics.counter(Metrics.RUN_COUNT).add(1, { status })
+  metrics.counter(Metrics.RUN_COUNT).add(1, { status, passthrough: String(passthrough) })
   metrics.histogram(Metrics.RUN_DURATION_MS).record(Date.now() - startMs)
   if (!success) {
     metrics.counter(Metrics.ERROR_COUNT).add(1)

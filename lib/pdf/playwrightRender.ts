@@ -63,9 +63,7 @@ export async function renderPageWithPlaywright(
 
   try {
     const chromiumLib = await getChromium()
-    const browser = await chromiumLib.launch({
-      args: ['--font-render-hinting=none'],
-    })
+    const browser = await launchOrThrow(chromiumLib, ['--font-render-hinting=none'])
 
     try {
       const page = await browser.newPage()
@@ -84,6 +82,20 @@ export async function renderPageWithPlaywright(
 
       // Wait for rendering to complete
       await page.waitForFunction('window.pdfRendered === true', { timeout })
+
+      // Check whether the browser script signaled a render error
+      const renderError = await page.evaluate(
+        () => (window as unknown as { pdfError?: boolean; pdfErrorMessage?: string }).pdfError,
+      )
+      if (renderError) {
+        const msg = await page.evaluate(
+          () =>
+            (window as unknown as { pdfErrorMessage?: string }).pdfErrorMessage ??
+            'Unknown render error',
+        )
+        throw new Error(`PDF render failed (page ${pageNumber}): ${msg}`)
+      }
+
       await page.waitForTimeout(200) // Small buffer for final paint
 
       // Get dimensions
@@ -120,6 +132,22 @@ export async function renderPageWithPlaywright(
 // ============================================================================
 // Internal Helpers
 // ============================================================================
+
+async function launchOrThrow(chromiumLib: NonNullable<typeof chromium>, args: string[]) {
+  try {
+    return await chromiumLib.launch({ args })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : ''
+    if (msg.includes("Executable doesn't exist") || msg.includes('playwright install')) {
+      throw new Error(
+        'Playwright browsers are not installed. Run: npx playwright install\n' +
+          'Playwright is required for PDF vision mode (rendering pages as images).',
+        { cause: err },
+      )
+    }
+    throw err
+  }
+}
 
 function generateRenderHtml(
   pdfBase64: string,
@@ -171,6 +199,8 @@ function generateRenderHtml(
       window.pdfRendered = true;
     } catch (e) {
       console.error('Render error:', e);
+      window.pdfError = true;
+      window.pdfErrorMessage = e instanceof Error ? e.message : String(e);
       window.pdfRendered = true;
     }
   </script>

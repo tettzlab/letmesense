@@ -4,9 +4,9 @@
  * Supports: DOCX, PPTX, XLSX, ODT, ODP, ODS
  */
 
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { DEFAULT_FETCH_TIMEOUT_MS, DEFAULT_PAGE_TIMEOUT_MS } from '../../common/timeouts.js'
 import { obs, SemanticAttributes } from '../../observability/index.js'
 import { analyzeSingleUnit } from '../../office/analyze.js'
@@ -40,6 +40,9 @@ import type { OfficeExtractOptions, OfficeLoadedDocument, OfficeUnit } from './t
 
 const DEFAULT_UNIT_TIMEOUT_MS = DEFAULT_PAGE_TIMEOUT_MS
 const DEFAULT_VISION_RENDER_SCALE = 2.0
+
+/** Prefix for temp directories created when the input is a URL or buffer */
+const OFFICE_VISION_TEMP_PREFIX = 'office-vision-'
 
 /** Map Office format to file extension */
 const FORMAT_EXTENSIONS: Record<OfficeFormat, string> = {
@@ -151,21 +154,19 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
       if (typeof input === 'string' && !input.startsWith('http')) {
         // File path input - use directly
         filePath = input
-      } else if (typeof input === 'string' && input.startsWith('http')) {
-        // URL input - save to temp file for LibreOffice
-        const tempDir = join(tmpdir(), `office-vision-${Date.now()}`)
-        await mkdir(tempDir, { recursive: true })
-        const ext = FORMAT_EXTENSIONS[format]
-        tempFilePath = join(tempDir, `document${ext}`)
-        await writeFile(tempFilePath, bytes)
-        filePath = tempFilePath
       } else {
-        // Buffer input - save to temp file for LibreOffice
-        const tempDir = join(tmpdir(), `office-vision-${Date.now()}`)
+        // URL or buffer input - save to temp file for LibreOffice
+        const tempDir = join(tmpdir(), `${OFFICE_VISION_TEMP_PREFIX}${Date.now()}`)
         await mkdir(tempDir, { recursive: true })
         const ext = FORMAT_EXTENSIONS[format]
         tempFilePath = join(tempDir, `document${ext}`)
-        await writeFile(tempFilePath, bytes)
+        try {
+          await writeFile(tempFilePath, bytes)
+        } catch (err) {
+          // Clean up the directory we just created before re-throwing
+          await rm(tempDir, { recursive: true, force: true }).catch(() => {})
+          throw err
+        }
         filePath = tempFilePath
       }
 
@@ -383,7 +384,6 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
             const result = await convertToPdf(filePath, { outputDir: tempDir })
 
             // Read the PDF file
-            const { readFile } = await import('node:fs/promises')
             const pdfBytes = await readFile(result.outputPath)
 
             // Create a copy of the bytes to avoid buffer detachment issues
@@ -466,7 +466,6 @@ export const officePlugin: FormatPlugin<OfficeUnit, OfficeExtractOptions> = {
     if (officeDoc.tempFilePath) {
       try {
         // Get parent directory of temp file
-        const { dirname } = await import('node:path')
         const tempDir = dirname(officeDoc.tempFilePath)
         await rm(tempDir, { recursive: true, force: true })
       } catch {

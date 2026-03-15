@@ -41,7 +41,11 @@ export interface ClassifiedError {
 }
 
 /**
- * Error patterns for classification
+ * Error patterns for classification.
+ *
+ * ORDER MATTERS — first match wins. Patterns are ordered from most specific
+ * (auth, rate_limit, quota) to least specific (validation, internal) so that
+ * precise categories are assigned before broad catch-alls can fire.
  */
 const ERROR_PATTERNS: Array<{
   pattern: RegExp
@@ -52,7 +56,8 @@ const ERROR_PATTERNS: Array<{
 }> = [
   // Auth errors (not retryable)
   {
-    pattern: /401|403|api.?key|unauthorized|forbidden|permission.?denied|invalid.?credentials/i,
+    pattern:
+      /\b401\b|\b403\b|api.?key|unauthorized|forbidden|permission.?denied|invalid.?credentials/i,
     category: 'auth',
     retryable: false,
     extractStatusCode: (msg) => {
@@ -63,7 +68,7 @@ const ERROR_PATTERNS: Array<{
 
   // Rate limits (retryable with delay)
   {
-    pattern: /429|rate.?limit|too.?many.?requests|throttl/i,
+    pattern: /\b429\b|rate.?limit|too.?many.?requests|throttl/i,
     category: 'rate_limit',
     retryable: true,
     extractStatusCode: () => 429,
@@ -75,7 +80,7 @@ const ERROR_PATTERNS: Array<{
 
   // Quota exceeded (not immediately retryable)
   {
-    pattern: /quota.?exceeded|usage.?limit|billing|payment.?required|402/i,
+    pattern: /quota.?exceeded|usage.?limit|billing|payment.?required|\b402\b/i,
     category: 'quota',
     retryable: false,
     extractStatusCode: () => 402,
@@ -97,7 +102,7 @@ const ERROR_PATTERNS: Array<{
 
   // Not found errors (not retryable)
   {
-    pattern: /404|not.?found|does.?not.?exist|no.?such.?file|ENOENT/i,
+    pattern: /\b404\b|not.?found|does.?not.?exist|no.?such.?file|ENOENT/i,
     category: 'not_found',
     retryable: false,
     extractStatusCode: () => 404,
@@ -105,7 +110,7 @@ const ERROR_PATTERNS: Array<{
 
   // Conflict errors (not typically retryable)
   {
-    pattern: /409|conflict|already.?exists|duplicate/i,
+    pattern: /\b409\b|conflict|already.?exists|duplicate/i,
     category: 'conflict',
     retryable: false,
     extractStatusCode: () => 409,
@@ -113,11 +118,13 @@ const ERROR_PATTERNS: Array<{
 
   // Validation errors (not retryable)
   {
-    pattern:
-      /400|invalid|malformed|schema|validation|parse.?error|syntax.?error|bad.?request|type.?error/i,
+    pattern: /\b400\b|invalid|malformed|schema|validation|parse.?error|syntax.?error|bad.?request/i,
     category: 'validation',
     retryable: false,
-    extractStatusCode: () => 400,
+    extractStatusCode: (msg) => {
+      if (/\b400\b|bad.?request/i.test(msg)) return 400
+      return undefined
+    },
   },
 
   // Cancelled (not retryable)
@@ -129,7 +136,7 @@ const ERROR_PATTERNS: Array<{
 
   // Dependency failures (retryable)
   {
-    pattern: /503|502|504|service.?unavailable|bad.?gateway|gateway.?timeout|upstream/i,
+    pattern: /\b503\b|\b502\b|\b504\b|service.?unavailable|bad.?gateway|gateway.?timeout|upstream/i,
     category: 'dependency',
     retryable: true,
     extractStatusCode: (msg) => {
@@ -140,7 +147,7 @@ const ERROR_PATTERNS: Array<{
 
   // Internal server errors (may be retryable)
   {
-    pattern: /500|internal.?server|internal.?error/i,
+    pattern: /\b500\b|internal.?server|internal.?error/i,
     category: 'internal',
     retryable: true,
     extractStatusCode: () => 500,

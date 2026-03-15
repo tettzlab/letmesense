@@ -40,6 +40,7 @@ export function buildProviderOptions(
 
   switch (resolved.provider) {
     case 'openai':
+    case 'azure':
       return { openai: { reasoningEffort: resolved.effort } }
     case 'anthropic':
       return {

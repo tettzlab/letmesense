@@ -10,7 +10,7 @@ import type { ContentAttributes, ContentKind, ContentRun, Lang } from './types.j
  * Units with the same key can be grouped into the same run.
  */
 export function generateRunKey(attrs: Pick<ContentAttributes, 'kind' | 'language'>): string {
-  return `${attrs.kind}|${attrs.language}`
+  return `${attrs.kind}::${attrs.language}`
 }
 
 /**
@@ -36,9 +36,9 @@ export function generateRunKey(attrs: Pick<ContentAttributes, 'kind' | 'language
  *
  * const runs = splitIntoRuns(attrs)
  * // [
- * //   { key: 'text-only|eng', unitIndices: [0, 1], ... },
- * //   { key: 'image-only|und', unitIndices: [2], ... },
- * //   { key: 'text-only|eng', unitIndices: [3], ... },
+ * //   { key: 'text-only::eng', unitIndices: [0, 1], ... },
+ * //   { key: 'image-only::und', unitIndices: [2], ... },
+ * //   { key: 'text-only::eng', unitIndices: [3], ... },
  * // ]
  * ```
  */

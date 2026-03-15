@@ -249,8 +249,8 @@ describe('countCharsInNodes', () => {
       },
     ]
 
-    // Both parent and child text counted
-    expect(countCharsInNodes(nodes)).toBe(4)
+    // Leaf text nodes are skipped to avoid double-counting; only parent paragraph text counted
+    expect(countCharsInNodes(nodes)).toBe(2)
   })
 
   it('returns 0 for empty nodes', () => {

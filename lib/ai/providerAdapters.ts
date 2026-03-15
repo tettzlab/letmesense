@@ -6,6 +6,7 @@
  */
 
 import { createAnthropic } from '@ai-sdk/anthropic'
+import { createAzure } from '@ai-sdk/azure'
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { createOpenAI } from '@ai-sdk/openai'
 import type { LanguageModel } from 'ai'
@@ -71,7 +72,7 @@ export const openaiAdapter: ProviderAdapter = {
     if (cachedTokens !== undefined && cachedTokens > 0) {
       result.inputDetails = {
         cached: cachedTokens,
-        uncached: inputTokens - cachedTokens,
+        uncached: Math.max(0, inputTokens - cachedTokens),
       }
     }
 
@@ -186,7 +187,7 @@ export const googleAdapter: ProviderAdapter = {
     if (cachedTokens !== undefined && cachedTokens > 0) {
       result.inputDetails = {
         cached: cachedTokens,
-        uncached: inputTokens - cachedTokens,
+        uncached: Math.max(0, inputTokens - cachedTokens),
       }
     }
 
@@ -255,5 +256,37 @@ export const ollamaAdapter: ProviderAdapter = {
       if (error instanceof ProviderUnavailableError) throw error
       throw new ProviderUnavailableError('Ollama', `Not running at ${host}`)
     }
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Azure OpenAI Adapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const azureAdapter: ProviderAdapter = {
+  id: 'azure',
+
+  createLanguageModel(config: LlmConfig, model: string): LanguageModel {
+    const key = config.apiKey ?? process.env.AZURE_OPENAI_API_KEY
+    if (!key) throw new ApiKeyError('Azure OpenAI')
+    const baseURL = config.baseUrl ?? process.env.AZURE_OPENAI_ENDPOINT
+    if (!baseURL) {
+      throw new ProviderUnavailableError('Azure OpenAI', 'AZURE_OPENAI_ENDPOINT not set')
+    }
+    const resourceName = process.env.AZURE_RESOURCE_NAME ?? new URL(baseURL).hostname.split('.')[0]
+    return createAzure({ apiKey: key, resourceName })(model)
+  },
+
+  // Azure OpenAI returns the same usage structure as OpenAI
+  extractUsage(info: RawUsageInfo): TokenUsage {
+    return openaiAdapter.extractUsage(info)
+  },
+
+  isAvailable(): boolean {
+    return !!(process.env.AZURE_OPENAI_API_KEY && process.env.AZURE_OPENAI_ENDPOINT)
+  },
+
+  spanAttributes(config: LlmConfig): Record<string, string> {
+    return { endpoint: config.baseUrl ?? process.env.AZURE_OPENAI_ENDPOINT ?? '' }
   },
 }

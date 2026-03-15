@@ -7,9 +7,6 @@ build/
 dist/
 out/
 
-# React Router
-.react-router/
-
 # Environment
 .env
 .env.*
@@ -29,15 +26,24 @@ pnpm-debug.log*
 !.vscode/extensions.json
 !.vscode/settings.json
 
-# Claude
+# Claude / Dev tooling
 CLAUDE.md
 .claude/
+.mcp.json
 .playwright-mcp/
 
 # OS
 .DS_Store
 Thumbs.db
 .fuse_hidden*
+
+# Generated test fixtures (recreate with generate-image-fixtures.ts)
+cli/fixtures/*.png
+cli/fixtures/*.jpg
+cli/fixtures/*.gif
+cli/fixtures/*.webp
+cli/fixtures/*.svg
+cli/fixtures/*.xyz
 
 # Testing
 coverage/
@@ -50,7 +56,7 @@ experiments/
 
 # Misc
 *.tsbuildinfo
-.cache/
+.*cache/
 tmp/
 *.zip
 /*~

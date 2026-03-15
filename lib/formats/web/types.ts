@@ -3,7 +3,7 @@
  * Extends pipeline core types with web-specific attributes.
  */
 
-import type { LoadedDocument } from '../../pipeline/plugin.js'
+import type { LoadedDocument, RenderedContent } from '../../pipeline/plugin.js'
 import type { ContentKind, DocumentUnit } from '../../pipeline/types.js'
 
 // ============================================================================
@@ -70,6 +70,15 @@ export interface WebLoadedDocument extends LoadedDocument {
     article: ReadabilityResult | null
     textContent: string
     langAttr: string
+  }
+
+  /** Cached Playwright session results for vision mode */
+  playwrightCache?: {
+    renderedText: string
+    screenshot: RenderedContent
+    language: string
+    browser: unknown
+    done: boolean
   }
 }
 

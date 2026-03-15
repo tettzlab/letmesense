@@ -251,7 +251,9 @@ describe('createGenericProvider', () => {
       // Verify generateText was called (messages contain image part)
       const call = vi.mocked(generateText).mock.calls[0][0] as any
       expect(call.messages[0].content).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: 'image' })]),
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'image', image: expect.any(Buffer) }),
+        ]),
       )
     })
   })

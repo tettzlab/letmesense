@@ -8,6 +8,7 @@ import { createGenericProvider } from './genericProvider.js'
 import { registerProvider } from './provider.js'
 import {
   anthropicAdapter,
+  azureAdapter,
   googleAdapter,
   ollamaAdapter,
   openaiAdapter,
@@ -18,4 +19,5 @@ export function registerAllProviders(): void {
   registerProvider(createGenericProvider(anthropicAdapter))
   registerProvider(createGenericProvider(googleAdapter))
   registerProvider(createGenericProvider(ollamaAdapter))
+  registerProvider(createGenericProvider(azureAdapter))
 }

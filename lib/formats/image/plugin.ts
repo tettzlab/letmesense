@@ -195,7 +195,7 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
   },
 
   async analyzeUnit(unit, doc): Promise<ImageUnit> {
-    const { tracer, metrics } = obs('image.plugin')
+    const { tracer, metrics, logger } = obs('image.plugin')
     const { imageFormat, width, height, bytes } = doc as ImageLoadedDocument
 
     return tracer.startSpan(Spans.ANALYZE_UNIT, async (span) => {
@@ -221,8 +221,9 @@ export const imagePlugin: FormatPlugin<ImageUnit, ImageExtractOptions> = {
 
           span.setAttribute('hasAlpha', meta.hasAlpha ?? false)
           span.setAttribute('colorSpace', meta.space ?? 'unknown')
-        } catch {
-          // Metadata extraction is optional
+        } catch (err) {
+          // Metadata extraction is optional — log at warn so failures are visible
+          logger.warn({ err, imageFormat }, 'Failed to extract image metadata via sharp')
         }
       }
 

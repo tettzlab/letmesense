@@ -188,18 +188,13 @@ export async function extractFromOffice(
 
     span.setAttribute(SemanticAttributes.UNIT_COUNT, attributes.length)
 
-    // Report analysis progress
-    if (progress?.onUnitAnalyzed) {
-      for (let i = 0; i < attributes.length; i++) {
-        progress.onUnitAnalyzed(i, attributes.length)
-      }
-    }
-
-    // Collect analysis errors
-    for (const attr of attributes) {
+    // Collect analysis errors and report progress per unit
+    for (let i = 0; i < attributes.length; i++) {
+      const attr = attributes[i]
       if (attr.error) {
         allErrors.push(attr.error)
       }
+      progress?.onUnitAnalyzed?.(i, attributes.length)
     }
 
     // Step 5: Split into runs
@@ -222,14 +217,11 @@ export async function extractFromOffice(
       headers,
     })
 
-    // Report extraction progress
-    if (progress?.onRunExtracted) {
-      for (let i = 0; i < runs.length; i++) {
-        progress.onRunExtracted(i, runs.length)
-      }
+    // Report extraction progress per run and collect extraction errors
+    for (let i = 0; i < runs.length; i++) {
+      progress?.onRunExtracted?.(i, runs.length)
     }
 
-    // Collect extraction errors
     const extractErrors = getExtractionErrors(extracted)
     allErrors.push(...extractErrors)
 

@@ -8,9 +8,9 @@ export class LlmError extends Error {
     message: string,
     public readonly code: string,
     public readonly provider?: string,
-    public readonly cause?: Error,
+    cause?: Error,
   ) {
-    super(message)
+    super(message, { cause })
     this.name = 'LlmError'
   }
 }
@@ -150,9 +150,12 @@ function getEnvVarName(provider: string): string {
     case 'anthropic':
       return 'ANTHROPIC_API_KEY'
     case 'google':
-      return 'GOOGLE_GENERATIVE_AI_API_KEY'
+      return 'GOOGLE_API_KEY'
     case 'ollama':
       return 'OLLAMA_HOST'
+    case 'azure':
+    case 'azure openai':
+      return 'AZURE_OPENAI_API_KEY'
     default:
       return `${provider.toUpperCase()}_API_KEY`
   }
@@ -169,6 +172,9 @@ function getApiKeyUrl(provider: string): string {
       return 'https://aistudio.google.com/apikey'
     case 'ollama':
       return 'https://ollama.ai (local installation)'
+    case 'azure':
+    case 'azure openai':
+      return 'https://portal.azure.com'
     default:
       return 'provider documentation'
   }
@@ -190,7 +196,7 @@ function getProviderSetupInstructions(provider: string): string {
     case 'google':
       return (
         `  1. Get an API key at https://aistudio.google.com/apikey\n` +
-        `  2. Set GOOGLE_GENERATIVE_AI_API_KEY environment variable`
+        `  2. Set GOOGLE_API_KEY environment variable`
       )
     case 'ollama':
       return (
@@ -198,6 +204,13 @@ function getProviderSetupInstructions(provider: string): string {
         `  2. Start Ollama: ollama serve\n` +
         `  3. Pull a model: ollama pull llama3.2\n` +
         `  4. (Optional) Set OLLAMA_HOST if not using localhost:11434`
+      )
+    case 'azure':
+    case 'azure openai':
+      return (
+        `  1. Create an Azure OpenAI resource at https://portal.azure.com\n` +
+        `  2. Deploy a model in Azure AI Studio\n` +
+        `  3. Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT environment variables`
       )
     default:
       return `  See provider documentation for setup instructions`

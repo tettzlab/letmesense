@@ -1,3 +1,19 @@
+vi.mock('./playwrightSession.js', () => ({
+  renderWebPage: vi.fn().mockResolvedValue({
+    text: 'Playwright rendered text',
+    screenshotBuffer: Buffer.from('fake-png-data'),
+    width: 2560,
+    height: 1920,
+    language: 'en',
+    browser: { close: vi.fn() },
+  }),
+}))
+
+vi.mock('../../../lib/observability/index.js', async (importOriginal) => {
+  const orig = (await importOriginal()) as Record<string, unknown>
+  return { ...orig }
+})
+
 import { webPlugin } from './plugin.js'
 import type { WebLoadedDocument, WebUnit } from './types.js'
 
@@ -98,7 +114,7 @@ describe('webPlugin', () => {
 
     it('has correct capabilities', () => {
       expect(webPlugin.capabilities.ocr).toBe(false)
-      expect(webPlugin.capabilities.vision).toBe(false)
+      expect(webPlugin.capabilities.vision).toBe(true)
       expect(webPlugin.capabilities.streaming).toBe(false)
       expect(webPlugin.capabilities.parallel).toBe(false)
       expect(webPlugin.capabilities.supportsRuns).toBe(false)
@@ -365,6 +381,97 @@ describe('webPlugin', () => {
       const result = await webPlugin.extractUnit(parsed.units[0], doc)
       expect(result.text).toContain('Article Title')
       expect(result.charCount).toBeGreaterThan(0)
+    })
+  })
+
+  describe('extractUnit (vision mode)', () => {
+    it('detects vision mode from options.model and returns Playwright text', async () => {
+      const bytes = new TextEncoder().encode(SIMPLE_HTML)
+      const doc = await webPlugin.load(bytes)
+      await webPlugin.parse(doc)
+      const parsed = await webPlugin.parse(doc)
+      const result = await webPlugin.extractUnit(parsed.units[0], doc, {
+        model: 'openai:gpt-4o',
+      })
+
+      expect(result.text).toBe('Playwright rendered text')
+      expect(result.extraction.method).toBe('digital')
+      expect(result.extraction.reliability).toBe('high')
+    })
+
+    it('falls back to JSDOM when no model option', async () => {
+      const bytes = new TextEncoder().encode(SIMPLE_HTML)
+      const doc = await webPlugin.load(bytes)
+      await webPlugin.parse(doc)
+      const parsed = await webPlugin.parse(doc)
+      const result = await webPlugin.extractUnit(parsed.units[0], doc)
+
+      // JSDOM path returns markdown, not "Playwright rendered text"
+      expect(result.text).toContain('Hello World')
+      expect(result.extraction.method).toBe('digital')
+    })
+  })
+
+  describe('renderUnit', () => {
+    it('returns RenderedContent with correct shape', async () => {
+      const bytes = new TextEncoder().encode(SIMPLE_HTML)
+      const doc = await webPlugin.load(bytes)
+      await webPlugin.parse(doc)
+      const parsed = await webPlugin.parse(doc)
+
+      const rendered = await webPlugin.renderUnit?.(parsed.units[0], doc)
+      expect(rendered).toBeDefined()
+      expect(rendered?.mimeType).toBe('image/png')
+      expect(rendered?.width).toBe(2560)
+      expect(rendered?.height).toBe(1920)
+      expect(typeof rendered?.base64).toBe('string')
+    })
+
+    it('uses cached session when available', async () => {
+      const { renderWebPage } = await import('./playwrightSession.js')
+      const mockRender = renderWebPage as ReturnType<typeof vi.fn>
+      mockRender.mockClear()
+
+      const bytes = new TextEncoder().encode(SIMPLE_HTML)
+      const doc = await webPlugin.load(bytes)
+      await webPlugin.parse(doc)
+      const parsed = await webPlugin.parse(doc)
+
+      // First call initializes session
+      await webPlugin.renderUnit?.(parsed.units[0], doc)
+      // Second call should reuse cache
+      await webPlugin.renderUnit?.(parsed.units[0], doc)
+
+      expect(mockRender).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('cleanup', () => {
+    it('closes browser when playwrightCache exists', async () => {
+      const bytes = new TextEncoder().encode(SIMPLE_HTML)
+      const doc = await webPlugin.load(bytes)
+      await webPlugin.parse(doc)
+      const parsed = await webPlugin.parse(doc)
+
+      // Trigger playwright session via renderUnit
+      await webPlugin.renderUnit?.(parsed.units[0], doc)
+
+      const loaded = doc as WebLoadedDocument
+      expect(loaded.playwrightCache).toBeDefined()
+
+      const closeFn = (loaded.playwrightCache?.browser as { close: ReturnType<typeof vi.fn> }).close
+
+      await webPlugin.cleanup?.(doc)
+      expect(closeFn).toHaveBeenCalled()
+      expect(loaded.playwrightCache).toBeUndefined()
+    })
+
+    it('is a no-op when no playwrightCache', async () => {
+      const bytes = new TextEncoder().encode(SIMPLE_HTML)
+      const doc = await webPlugin.load(bytes)
+
+      // Should not throw
+      await webPlugin.cleanup?.(doc)
     })
   })
 

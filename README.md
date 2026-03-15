@@ -1,6 +1,9 @@
 # letmesense
 
+[![CI](https://github.com/tettzlab/letmesense/actions/workflows/ci.yml/badge.svg)](https://github.com/tettzlab/letmesense/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/tettzlab/letmesense/actions/workflows/codeql.yml/badge.svg)](https://github.com/tettzlab/letmesense/actions/workflows/codeql.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A524-brightgreen)](https://nodejs.org)
 
 Extract text from PDFs and Office documents with automatic OCR fallback and optional LLM enhancement.
 
@@ -66,6 +69,8 @@ letmesense <input> [options]
 | Plain | (default) | Text extraction only | Free |
 | LLM | `--llm` | Text → LLM → Markdown | $ |
 | Vision | `--vision` | Text + Images → LLM → Markdown | $$$ |
+
+> **Note:** Cost estimates shown before confirmation prompts are approximate. Actual charges depend on content complexity, model-specific tokenization, and provider pricing at the time of the request. Always review your provider's billing dashboard for precise usage.
 
 ### Output formats
 
@@ -188,10 +193,71 @@ Set API keys:
 ```bash
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
-export GOOGLE_GENERATIVE_AI_API_KEY=...
+export GOOGLE_API_KEY=...
 ```
 
 Provider auto-detects from available keys. Use `-m provider:alias` to override.
+
+### Custom Model Registry
+
+The bundled `models.json` defines all supported models, their pricing, context windows, and capabilities. You can override it to add custom models, update pricing, or restrict available models.
+
+```bash
+# Generate a starter template
+letmesense init-models
+
+# Or copy the full bundled registry to customize
+letmesense init-models --full
+
+# Use a custom file
+letmesense doc.pdf --models-file models.json
+
+# Or pass JSON inline
+letmesense doc.pdf --models-json '{"defaultProvider":"anthropic", ...}'
+
+# Or via environment variables
+export MODELS_FILE=/path/to/my-models.json
+# or
+export MODELS_JSON='...'
+```
+
+The file structure:
+
+```json
+{
+  "defaultProvider": "openai",
+  "providers": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "defaultModel": "gpt-5-mini",
+      "defaultVisionModel": "gpt-5-mini"
+    }
+  ],
+  "models": [
+    {
+      "id": "gpt-5-mini",
+      "name": "GPT-5 Mini",
+      "provider": "openai",
+      "encoding": "o200k_base",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "aliases": ["mini"],
+      "pricing": { "input": 0.25, "output": 2.0, "image": 0.25 },
+      "capabilities": { "vision": true }
+    }
+  ]
+}
+```
+
+Each model entry supports:
+- **`aliases`** — short names for `-m provider:alias` (e.g. `openai:mini`)
+- **`pricing`** — per-million-token costs (used for `--yes` cost estimates)
+- **`capabilities.vision`** — whether the model accepts images
+- **`capabilities.pdfInput`** — whether the model accepts PDF files directly
+- **`capabilities.reasoning`** — object with `levels` array (`none`, `low`, `medium`, `high`, `xhigh`) and a `default` effort for reasoning models
+
+See the bundled [`models.json`](models.json) for the full list.
 
 ## Programmatic API
 
@@ -225,6 +291,10 @@ formatted = await sense("document.pdf", SenseOptions(mode="llm"))
 vision = await sense("document.pdf", SenseOptions(mode="vision"))
 ```
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and pull request guidelines.
+
 ## Development
 
 ### TypeScript
@@ -254,17 +324,79 @@ uv run task lint:fix   # Auto-fix
 sudo apt install libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev
 ```
 
-### Vision Mode (Office)
+### LibreOffice (for Vision Mode)
 
-Requires LibreOffice:
+Vision mode (`--vision`) on Office documents (DOCX, PPTX, XLSX, etc.) requires LibreOffice to render pages as images. Basic text extraction works without it.
+
+**macOS**
 
 ```bash
-# macOS
 brew install --cask libreoffice
-
-# Ubuntu/Debian
-sudo apt install libreoffice-core
 ```
+
+The app installs to `/Applications/LibreOffice.app` and is auto-detected — no PATH changes needed.
+
+**Linux**
+
+```bash
+# Ubuntu / Debian
+sudo apt install libreoffice-core libreoffice-impress libreoffice-writer libreoffice-calc
+
+# Fedora
+sudo dnf install libreoffice-core libreoffice-impress libreoffice-writer libreoffice-calc
+
+# Arch
+sudo pacman -S libreoffice-fresh
+```
+
+Snap, Flatpak, NixOS, and Homebrew installs are also auto-detected.
+
+**Windows**
+
+```bash
+choco install libreoffice-fresh
+```
+
+Or download from [libreoffice.org](https://www.libreoffice.org/download/).
+
+**Custom install path**
+
+If LibreOffice is installed in a non-standard location, set the `LIBREOFFICE_PATH` environment variable:
+
+```bash
+export LIBREOFFICE_PATH=/path/to/soffice
+```
+
+**Verify installation**
+
+```bash
+soffice --version
+```
+
+### Playwright (for PDF/Web Vision Mode)
+
+Vision mode (`--vision`) on PDFs and web pages uses [Playwright](https://playwright.dev/) to render pages as images in a headless Chromium browser. This provides accurate font rendering for all scripts including CJK.
+
+**TypeScript**
+
+```bash
+npx playwright install
+```
+
+**Python**
+
+```bash
+pip install 'letmesense[browser]'
+playwright install
+```
+
+Without Playwright browsers installed, PDF vision mode falls back to `@napi-rs/canvas` rendering (TS only), which may produce poor results for CJK text. Web page vision mode requires Playwright. The `--playwright` flag controls this behavior:
+
+| Value | Behavior |
+|-------|----------|
+| `auto` (default) | Use Playwright if available, fall back to canvas |
+| `always` | Require Playwright, fail if browsers not installed |
+| `none` | Skip Playwright, always use canvas rendering |
 
 ### Offline OCR
 
@@ -276,4 +408,4 @@ Download tessdata files to `tessdata/`:
 
 Apache-2.0
 
-**Note:** `xlsx` is pinned to 0.18.5 (last Apache-2.0 release before SheetJS license change).
+**Note:** Spreadsheet fixture generation uses [ExcelJS](https://github.com/exceljs/exceljs) (MIT licensed).

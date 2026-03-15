@@ -10,7 +10,7 @@ import { resolve } from 'node:path'
 import type { LanguageModel } from 'ai'
 
 /** Supported AI provider identifiers */
-export type ProviderId = 'openai' | 'anthropic' | 'google' | 'ollama'
+export type ProviderId = 'openai' | 'anthropic' | 'google' | 'ollama' | 'azure'
 
 /**
  * Tokenizer encoding identifier.
@@ -112,7 +112,7 @@ interface ModelsJson {
   models: ModelConfig[]
 }
 
-const VALID_PROVIDER_IDS = new Set(['openai', 'anthropic', 'google', 'ollama'])
+const VALID_PROVIDER_IDS = new Set(['openai', 'anthropic', 'google', 'ollama', 'azure'])
 const VALID_ENCODINGS = new Set([
   'cl100k_base',
   'o200k_base',
@@ -201,11 +201,11 @@ let _pendingConfig: ModelRegistryInit | null = null
  */
 export function initModelRegistry(config: ModelRegistryInit): void {
   if (_cache) {
-    console.debug('[ai] initModelRegistry() called after registry already loaded — ignored.')
+    // Already loaded — silently ignore duplicate init
     return
   }
   if (_pendingConfig) {
-    console.debug('[ai] initModelRegistry() called twice before registry load — ignored.')
+    // Duplicate init before load — silently ignore
     return
   }
   _pendingConfig = config

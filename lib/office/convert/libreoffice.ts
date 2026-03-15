@@ -3,9 +3,9 @@
  */
 
 import { execSync, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { mkdir, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { existsSync, statSync } from 'node:fs'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
 import { DEFAULT_PAGE_TIMEOUT_MS } from '../../common/timeouts.js'
@@ -28,6 +28,56 @@ function isHarmlessStderr(raw: string): boolean {
   return cleanStderr(raw) === ''
 }
 
+/**
+ * Patterns that indicate a transient OS-level failure worth retrying.
+ * macOS "Task policy set failed" is a kernel sandbox race that resolves on retry.
+ */
+const TRANSIENT_ERROR_PATTERNS = [/Task policy set failed/i, /lock file/i]
+
+/** Check if an error message indicates a transient failure worth retrying. */
+function isTransientError(message: string): boolean {
+  return TRANSIENT_ERROR_PATTERNS.some((p) => p.test(message))
+}
+
+/** Default number of retry attempts for transient failures. */
+const DEFAULT_RETRIES = 2
+
+/** Base delay between retries in ms (doubles each attempt). */
+const RETRY_BASE_DELAY_MS = 500
+
+/** Retry wrapper for transient OS-level failures with exponential backoff. */
+async function withTransientRetry<T>(
+  fn: () => Promise<T>,
+  opts: { retries: number; inputPath: string },
+): Promise<T> {
+  const { logger } = obs('office.libreoffice')
+  for (let attempt = 0; attempt <= opts.retries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (attempt < opts.retries && isTransientError(msg)) {
+        const delay = RETRY_BASE_DELAY_MS * 2 ** attempt
+        logger.warn(
+          {
+            inputPath: opts.inputPath,
+            attempt: attempt + 1,
+            maxRetries: opts.retries,
+            delay,
+            error: msg,
+          },
+          'Transient LibreOffice error, retrying',
+        )
+        await new Promise((r) => setTimeout(r, delay))
+        continue
+      }
+      throw err
+    }
+  }
+  /* c8 ignore next -- unreachable: loop always returns or throws */
+  throw new Error('unreachable')
+}
+
 /** Strip known harmless warnings from stderr to surface real errors. */
 function cleanStderr(raw: string): string {
   let cleaned = raw
@@ -42,39 +92,87 @@ function libreOfficeEnv(): NodeJS.ProcessEnv {
   return { ...process.env, SAL_DISABLE_JAVA: '1' }
 }
 
-/** LibreOffice executable names to search for */
+/** Bare executable names to search via PATH (which/where). */
 const LIBREOFFICE_EXECUTABLES = [
   'libreoffice',
   'soffice',
   'libreoffice7.6',
   'libreoffice7.5',
   'libreoffice7.4',
-  '/Applications/LibreOffice.app/Contents/MacOS/soffice', // macOS
-  '/usr/bin/libreoffice',
-  '/usr/local/bin/libreoffice',
 ]
+
+/** Platform-specific absolute paths to try when PATH lookup fails. */
+function getLibreOfficeSearchPaths(): string[] {
+  const platform = process.platform
+  if (platform === 'darwin') {
+    return [
+      '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+      '/opt/homebrew/bin/soffice',
+      '/opt/homebrew/bin/libreoffice',
+      '/usr/local/bin/soffice',
+      '/usr/local/bin/libreoffice',
+    ]
+  }
+  if (platform === 'win32') {
+    const paths = [
+      'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+      'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
+    ]
+    const local = process.env.LOCALAPPDATA
+    if (local) {
+      paths.push(join(local, 'Programs', 'LibreOffice', 'program', 'soffice.exe'))
+    }
+    return paths
+  }
+  // Linux
+  return [
+    '/usr/bin/libreoffice',
+    '/usr/bin/soffice',
+    '/usr/local/bin/libreoffice',
+    '/usr/local/bin/soffice',
+    '/snap/bin/libreoffice',
+    '/var/lib/flatpak/exports/bin/org.libreoffice.LibreOffice',
+    join(homedir(), '.local/share/flatpak/exports/bin/org.libreoffice.LibreOffice'),
+    '/run/current-system/sw/bin/libreoffice', // NixOS
+  ]
+}
 
 /**
  * Find the LibreOffice executable on the system.
  */
 export function findLibreOffice(): string | null {
-  const isWindows = process.platform === 'win32'
-
-  for (const exe of LIBREOFFICE_EXECUTABLES) {
+  // Honour explicit override (useful for CI / Docker / non-standard installs)
+  const envPath = process.env.LIBREOFFICE_PATH
+  if (envPath) {
     try {
-      if (isWindows) {
-        execSync(`where ${exe}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] })
-      } else {
-        execSync(`which ${exe}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] })
+      if (existsSync(envPath) && statSync(envPath).isFile()) {
+        return envPath
       }
-      return exe
     } catch {
-      // Try direct path check for absolute paths
-      if (exe.startsWith('/') && existsSync(exe)) {
-        return exe
-      }
+      // Permission error or other fs issue — fall through to PATH search
     }
   }
+
+  const isWindows = process.platform === 'win32'
+  const whichCmd = isWindows ? 'where' : 'which'
+
+  // 1. Search PATH via bare executable names
+  for (const exe of LIBREOFFICE_EXECUTABLES) {
+    try {
+      execSync(`${whichCmd} ${exe}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] })
+      return exe
+    } catch {
+      // not on PATH, continue
+    }
+  }
+
+  // 2. Try platform-specific absolute paths
+  for (const absPath of getLibreOfficeSearchPaths()) {
+    if (existsSync(absPath)) {
+      return absPath
+    }
+  }
+
   return null
 }
 
@@ -126,6 +224,17 @@ export async function convertToPdf(
   inputPath: string,
   options: ConvertOptions = {},
 ): Promise<ConversionResult> {
+  return withTransientRetry(() => convertToPdfOnce(inputPath, options), {
+    retries: options.retries ?? DEFAULT_RETRIES,
+    inputPath,
+  })
+}
+
+/** Single-attempt conversion (called by convertToPdf with retry wrapper). */
+async function convertToPdfOnce(
+  inputPath: string,
+  options: ConvertOptions = {},
+): Promise<ConversionResult> {
   const { tracer, metrics, logger } = obs('office.libreoffice')
 
   return tracer.startSpan(Spans.LIBREOFFICE_CONVERT, async (span) => {
@@ -152,10 +261,19 @@ export async function convertToPdf(
     // Ensure output directory exists
     await mkdir(outputDir, { recursive: true })
 
+    // Create an isolated profile directory so concurrent calls (even across
+    // OS processes) never contend on LibreOffice's default profile lock.
+    // mkdtemp is atomic at the OS level — no TOCTOU race.
+    const profileDir = await mkdtemp(join(tmpdir(), 'lo-profile-'))
+
     // Determine output filename
     const inputBasename = basename(inputPath)
     const outputBasename = inputBasename.replace(/\.[^.]+$/, '.pdf')
     const outputPath = join(outputDir, outputBasename)
+
+    const cleanupProfile = () => {
+      rm(profileDir, { recursive: true, force: true }).catch(() => {})
+    }
 
     return new Promise((resolve, reject) => {
       const proc = spawn(
@@ -165,6 +283,7 @@ export async function convertToPdf(
           '--invisible',
           '--nologo',
           '--nofirststartwizard',
+          `-env:UserInstallation=file://${profileDir}`,
           '--convert-to',
           'pdf',
           '--outdir',
@@ -189,11 +308,13 @@ export async function convertToPdf(
 
       const timer = setTimeout(() => {
         proc.kill('SIGKILL')
+        cleanupProfile()
         reject(new OfficeConvertError(`Conversion timed out after ${timeout}ms`))
       }, timeout)
 
       proc.on('close', (code) => {
         clearTimeout(timer)
+        cleanupProfile()
 
         // Check file existence as primary success indicator.
         // LibreOffice may exit with non-zero code due to harmless warnings
@@ -234,6 +355,7 @@ export async function convertToPdf(
 
       proc.on('error', (err) => {
         clearTimeout(timer)
+        cleanupProfile()
         metrics.counter(Metrics.LIBREOFFICE_CONVERSION_COUNT).add(1, { status: 'error' })
         reject(new OfficeConvertError(`Failed to spawn LibreOffice: ${err.message}`))
       })
@@ -250,6 +372,18 @@ export async function convertToPdf(
  * @returns Conversion result
  */
 export async function convertWithProfile(
+  inputPath: string,
+  profileDir: string,
+  options: ConvertOptions = {},
+): Promise<ConversionResult> {
+  return withTransientRetry(() => convertWithProfileOnce(inputPath, profileDir, options), {
+    retries: options.retries ?? DEFAULT_RETRIES,
+    inputPath,
+  })
+}
+
+/** Single-attempt profile conversion (called by convertWithProfile with retry wrapper). */
+async function convertWithProfileOnce(
   inputPath: string,
   profileDir: string,
   options: ConvertOptions = {},

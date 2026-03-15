@@ -12,8 +12,9 @@ import TurndownService from 'turndown'
 
 import { DEFAULT_FETCH_TIMEOUT_MS } from '../../common/timeouts.js'
 import { obs, SemanticAttributes } from '../../observability/index.js'
-import type { CliOption, FormatPlugin } from '../../pipeline/plugin.js'
+import type { CliOption, FormatPlugin, RenderedContent } from '../../pipeline/plugin.js'
 import type { ContentKind, UnitExtractionResult } from '../../pipeline/types.js'
+import { renderWebPage } from './playwrightSession.js'
 import { Metrics, Spans } from './signals.js'
 import {
   classifyHtml,
@@ -36,7 +37,7 @@ export const webPlugin: FormatPlugin<WebUnit, WebExtractOptions> = {
 
   capabilities: {
     ocr: false,
-    vision: false,
+    vision: true,
     streaming: false,
     parallel: false,
     supportsRuns: false,
@@ -205,6 +206,32 @@ export const webPlugin: FormatPlugin<WebUnit, WebExtractOptions> = {
   async extractUnit(unit, doc, options = {}): Promise<UnitExtractionResult> {
     const { tracer, metrics } = obs('web.plugin')
     const loadedDoc = doc as WebLoadedDocument
+
+    // Vision mode: use Playwright for full-fidelity text extraction
+    if (isVisionMode(options)) {
+      return tracer.startSpan(Spans.EXTRACT_UNIT, async (span) => {
+        await ensurePlaywrightSession(loadedDoc, {
+          renderScale: options.renderScale as number | undefined,
+        })
+        const text = loadedDoc.playwrightCache?.renderedText ?? ''
+        const charCount = text.replace(/\s+/g, '').length
+
+        span.setAttribute(SemanticAttributes.CHAR_COUNT, charCount)
+        span.setAttribute(SemanticAttributes.METHOD, 'digital')
+        metrics.counter(Metrics.EXTRACT_UNIT_COUNT).add(1)
+
+        return {
+          text,
+          charCount,
+          extraction: {
+            method: 'digital',
+            reliability: 'high',
+          },
+        }
+      })
+    }
+
+    // Non-vision: JSDOM + Readability + Turndown (unchanged)
     const { html, source } = loadedDoc
     const { includeLinks = true, includeImages = true } = options
 
@@ -270,6 +297,35 @@ export const webPlugin: FormatPlugin<WebUnit, WebExtractOptions> = {
     })
   },
 
+  async renderUnit(_unit, doc, _options = {}): Promise<RenderedContent> {
+    const { tracer, metrics } = obs('web.plugin')
+    const loadedDoc = doc as WebLoadedDocument
+
+    return tracer.startSpan(Spans.RENDER_UNIT, async (span) => {
+      await ensurePlaywrightSession(loadedDoc)
+      const screenshot = loadedDoc.playwrightCache?.screenshot
+      if (!screenshot) {
+        throw new Error('Playwright session failed to produce screenshot')
+      }
+
+      span.setAttribute(SemanticAttributes.WIDTH, screenshot.width)
+      span.setAttribute(SemanticAttributes.HEIGHT, screenshot.height)
+      metrics.counter(Metrics.RENDER_UNIT_COUNT).add(1)
+      metrics.histogram(Metrics.RENDER_BYTES).record(screenshot.base64.length)
+
+      return screenshot
+    })
+  },
+
+  async cleanup(doc): Promise<void> {
+    const loadedDoc = doc as WebLoadedDocument
+    if (loadedDoc.playwrightCache?.browser) {
+      const browser = loadedDoc.playwrightCache.browser as { close(): Promise<void> }
+      await browser.close()
+      loadedDoc.playwrightCache = undefined
+    }
+  },
+
   getCliOptions(): CliOption[] {
     return [
       {
@@ -287,6 +343,72 @@ export const webPlugin: FormatPlugin<WebUnit, WebExtractOptions> = {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/**
+ * Detect vision mode from the options bag passed by the processor.
+ * In vision mode, the processor passes VisionExtractOptions which includes `model` as a string.
+ */
+function isVisionMode(options: Record<string, unknown>): boolean {
+  return typeof options.model === 'string'
+}
+
+interface PlaywrightSessionOptions {
+  renderScale?: number
+}
+
+/**
+ * Ensure the Playwright session is initialized (idempotent).
+ * Caches results on doc.playwrightCache.
+ */
+async function ensurePlaywrightSession(
+  doc: WebLoadedDocument,
+  options: PlaywrightSessionOptions = {},
+): Promise<void> {
+  if (doc.playwrightCache?.done) return
+
+  const { tracer, metrics, logger } = obs('web.plugin')
+
+  await tracer.startSpan(Spans.PLAYWRIGHT_SESSION, async (span) => {
+    const isUrl = doc.source.startsWith('http://') || doc.source.startsWith('https://')
+    span.setAttribute('inputType', isUrl ? 'url' : 'html')
+
+    const result = await renderWebPage({
+      url: isUrl ? doc.source : undefined,
+      html: isUrl ? undefined : doc.html,
+      scale: options.renderScale ?? 2,
+    })
+
+    const screenshot = {
+      base64: result.screenshotBuffer.toString('base64'),
+      mimeType: 'image/png' as const,
+      width: result.width,
+      height: result.height,
+    }
+
+    doc.playwrightCache = {
+      renderedText: result.text,
+      screenshot,
+      language: result.language,
+      browser: result.browser,
+      done: true,
+    }
+
+    span.setAttribute(SemanticAttributes.CHAR_COUNT, result.text.length)
+    span.setAttribute(SemanticAttributes.WIDTH, result.width)
+    span.setAttribute(SemanticAttributes.HEIGHT, result.height)
+    metrics.counter(Metrics.PLAYWRIGHT_SESSION_COUNT).add(1)
+    metrics.histogram(Metrics.PLAYWRIGHT_TEXT_CHARS).record(result.text.length)
+    logger.debug(
+      {
+        source: doc.source,
+        textChars: result.text.length,
+        width: result.width,
+        height: result.height,
+      },
+      'Playwright session initialized',
+    )
+  })
+}
 
 /**
  * Fallback DOM parse when cached results are not available (direct plugin use).

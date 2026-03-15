@@ -37,7 +37,7 @@ export interface VisionOptions {
 /** Default vision options */
 export const DEFAULT_VISION_OPTIONS: Required<Omit<VisionOptions, 'signal'>> = {
   enabled: false,
-  model: 'openai:gpt-5-mini',
+  model: 'openai:mini',
   parallel: 4,
   keepTemp: false,
   systemPrompt: '',

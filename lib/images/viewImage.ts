@@ -12,7 +12,7 @@ import type { LanguageModel } from 'ai'
 import sharp from 'sharp'
 import { obs, SemanticAttributes } from '../observability/index.js'
 import { Metrics, Spans } from './signals.js'
-import { analyzeImage } from './vision.js'
+import { analyzeImage, type VisionAnalysisError } from './vision.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -85,7 +85,7 @@ interface ViewImageSuccess {
 interface ViewImageError {
   ok: false
   error: string
-  code?: ErrorCode
+  code?: ErrorCode | VisionAnalysisError['code']
 }
 
 export type ViewImageResult = ViewImageSuccess | ViewImageError
@@ -336,9 +336,13 @@ async function processRasterImage(
 
   // Get final dimensions after resize
   if (result.resized) {
-    const outputMeta = await sharp(outputBuffer).metadata()
-    result.outputWidth = outputMeta.width
-    result.outputHeight = outputMeta.height
+    try {
+      const outputMeta = await sharp(outputBuffer).metadata()
+      result.outputWidth = outputMeta.width
+      result.outputHeight = outputMeta.height
+    } catch {
+      warnings.push('Could not read output dimensions after resize')
+    }
   }
 
   result.mimeType = FORMAT_TO_MIME[format]
@@ -364,7 +368,7 @@ export async function runViewImage(
   resolvedPath: string,
   options: ViewImageOptions,
 ): Promise<ViewImageResult> {
-  const { tracer, metrics, logger } = obs('image.view')
+  const { tracer, metrics, logger } = obs('images.view')
 
   return tracer.startSpan(Spans.VIEW, async (span) => {
     const start = performance.now()
@@ -401,8 +405,9 @@ export async function runViewImage(
     span.setAttribute(SemanticAttributes.FORMAT, format)
 
     // Process based on format with timeout
+    let timer: ReturnType<typeof setTimeout> | undefined
     const timeoutPromise = new Promise<ViewImageError>((resolve) => {
-      setTimeout(() => {
+      timer = setTimeout(() => {
         resolve({ ok: false, error: 'Image processing timed out', code: 'LIMIT' })
       }, IMAGE_PROCESS_TIMEOUT_MS)
     })
@@ -413,6 +418,7 @@ export async function runViewImage(
         : processRasterImage(resolvedPath, options.filePath, bytes, format, options)
 
     const result = await Promise.race([processPromise, timeoutPromise])
+    clearTimeout(timer)
 
     // Record metrics
     const durationMs = performance.now() - start
@@ -469,7 +475,7 @@ export async function runViewImage(
       return {
         ok: false,
         error: `Vision analysis failed: ${visionResult.error}`,
-        code: visionResult.code as ErrorCode,
+        code: visionResult.code,
       }
     }
 

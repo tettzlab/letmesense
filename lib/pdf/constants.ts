@@ -27,9 +27,8 @@ export const DEFAULT_RUN_SEPARATOR = '\n\n===\n\n'
  *
  * Override via LETMESENSE_OCR_THRESHOLD environment variable.
  */
-export const DEFAULT_MIXED_FALLBACK_CHARS = process.env.LETMESENSE_OCR_THRESHOLD
-  ? parseInt(process.env.LETMESENSE_OCR_THRESHOLD, 10)
-  : 50
+export const DEFAULT_MIXED_FALLBACK_CHARS =
+  parseInt(process.env.LETMESENSE_OCR_THRESHOLD ?? '', 10) || 50
 
 // Re-export shared timeout constants for backwards compatibility
 export { DEFAULT_FETCH_TIMEOUT_MS, DEFAULT_PAGE_TIMEOUT_MS } from '../common/timeouts.js'
@@ -47,9 +46,7 @@ export { DEFAULT_FETCH_TIMEOUT_MS, DEFAULT_PAGE_TIMEOUT_MS } from '../common/tim
  *
  * Override via LETMESENSE_OCR_SCALE environment variable.
  */
-export const DEFAULT_OCR_RENDER_SCALE = process.env.LETMESENSE_OCR_SCALE
-  ? parseFloat(process.env.LETMESENSE_OCR_SCALE)
-  : 2.5
+export const DEFAULT_OCR_RENDER_SCALE = parseFloat(process.env.LETMESENSE_OCR_SCALE ?? '') || 2.5
 
 /**
  * Wraps a promise with a timeout. Rejects with TimeoutError if the promise

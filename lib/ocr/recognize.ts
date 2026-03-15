@@ -67,12 +67,12 @@ export async function recognizeImage(
  * @param worker - Tesseract.js worker
  * @param imageBuffer - PNG, JPEG, or other image format buffer
  * @param options - OCR options (lang and tessdataDir ignored since worker is provided)
- * @returns OCR result with text and confidence
+ * @returns OCR result with text, confidence, and optional orientation and script fields
  */
 export async function recognizeImageWithWorker(
   worker: Worker,
   imageBuffer: Buffer | Uint8Array,
-  options: Pick<OcrOptions, 'timeout' | 'detectOrientation'> = {},
+  options: Pick<OcrOptions, 'timeout' | 'detectOrientation'> & { lang?: string } = {},
 ): Promise<OcrResultWithOrientation> {
   const { tracer, metrics } = obs('ocr')
 
@@ -88,7 +88,9 @@ export async function recognizeImageWithWorker(
 
     span.setAttribute(SemanticAttributes.CONFIDENCE, result.confidence)
     span.setAttribute('textLength', result.text.length)
-    metrics.histogram(Metrics.CONFIDENCE_SCORE).record(result.confidence)
+    metrics
+      .histogram(Metrics.CONFIDENCE_SCORE)
+      .record(result.confidence, { lang: options.lang ?? 'eng' })
 
     return result
   })
@@ -102,6 +104,10 @@ async function performRecognition(
   imageBuffer: Buffer | Uint8Array,
   options: Pick<OcrOptions, 'detectOrientation'>,
 ): Promise<OcrResultWithOrientation> {
+  if (imageBuffer.length === 0) {
+    return { text: '', confidence: 0, orientation: undefined, script: undefined }
+  }
+
   // Tesseract.js expects Buffer, convert if needed
   const buffer = Buffer.isBuffer(imageBuffer) ? imageBuffer : Buffer.from(imageBuffer)
 

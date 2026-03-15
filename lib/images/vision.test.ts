@@ -91,7 +91,7 @@ describe('vision', () => {
               role: 'user',
               content: [
                 { type: 'text', text: 'Extract all text from this image' },
-                { type: 'image', image: 'data:image/png;base64,base64data' },
+                { type: 'image', image: Buffer.from('base64data', 'base64') },
               ],
             },
           ],
@@ -275,7 +275,7 @@ describe('vision', () => {
               role: 'user',
               content: [
                 { type: 'text', text: 'Custom prompt' },
-                { type: 'image', image: 'data:image/jpeg;base64,base64data' },
+                { type: 'image', image: Buffer.from('base64data', 'base64') },
               ],
             },
           ],
@@ -327,10 +327,19 @@ describe('vision', () => {
     })
 
     it('returns error when Google API key is missing', () => {
+      delete process.env.GOOGLE_API_KEY
       delete process.env.GOOGLE_GENERATIVE_AI_API_KEY
       const result = createVisionModel('google:flash')
-      expect(result.error).toContain('GOOGLE_GENERATIVE_AI_API_KEY')
+      expect(result.error).toContain('GOOGLE_API_KEY')
       expect(result.model).toBeNull()
+    })
+
+    it('accepts legacy GOOGLE_GENERATIVE_AI_API_KEY as fallback', () => {
+      delete process.env.GOOGLE_API_KEY
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'test-key'
+      const result = createVisionModel('google:flash')
+      expect(result.error).toBeUndefined()
+      expect(result.model).toBeDefined()
     })
 
     it('creates model when API key is present', () => {

@@ -6,9 +6,7 @@
 import type { Lang } from '../common/types.js'
 import type { PromptPreset } from './prompts.js'
 
-export type { PromptPreset }
-
-export type { Lang }
+export type { Lang, PromptPreset }
 
 // ============================================================================
 // Domain-Specific Contexts (for LLM journaling and prompt substitution)

@@ -53,12 +53,12 @@ export async function createOcrWorker(options: CreateWorkerOptions): Promise<Wor
  * Terminate a worker safely.
  */
 export async function terminateWorker(worker: Worker): Promise<void> {
-  const { metrics } = obs('ocr.worker')
+  const { metrics, logger } = obs('ocr.worker')
 
   try {
     await worker.terminate()
     metrics.counter(Metrics.WORKER_TERMINATED_COUNT).add(1)
-  } catch {
-    // Ignore termination errors
+  } catch (err) {
+    logger.warn({ err }, 'OCR worker termination failed')
   }
 }

@@ -1,5 +1,6 @@
 // Import and re-export shared types
 import type { Lang } from '../common/types.js'
+
 export type { Lang }
 
 export type PageKind = 'born-digital' | 'scanned-image' | 'mixed' | 'empty' | 'unknown'

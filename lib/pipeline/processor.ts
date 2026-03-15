@@ -653,22 +653,22 @@ export class PipelineProcessor {
     return tracer.startSpan(Spans.URL_RESOLVE, async (span) => {
       span.setAttribute('url.original', url)
 
-      const timeout =
+      const rawTimeout =
         (options as Record<string, unknown>).fetchTimeout ??
-        (options as Record<string, unknown>).timeout ??
-        DEFAULT_FETCH_TIMEOUT_MS
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), timeout as number)
+        (options as Record<string, unknown>).timeout
+      const timeoutMs =
+        typeof rawTimeout === 'number' && Number.isFinite(rawTimeout)
+          ? rawTimeout
+          : DEFAULT_FETCH_TIMEOUT_MS
 
-      // Combine user signal with timeout
-      const signal = options.signal
-      if (signal) {
-        signal.addEventListener('abort', () => controller.abort(), { once: true })
-      }
+      // Use AbortSignal.any to combine user signal with timeout — no manual listener needed
+      const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)]
+      if (options.signal) signals.push(options.signal)
+      const combinedSignal = AbortSignal.any(signals)
 
       try {
         const response = await fetch(url, {
-          signal: controller.signal,
+          signal: combinedSignal,
           headers: {
             'User-Agent': 'letmesense/1.0',
             Accept: '*/*',
@@ -698,8 +698,6 @@ export class PipelineProcessor {
       } catch (err) {
         metrics.counter(Metrics.URL_RESOLVE_COUNT).add(1, { status: 'error' })
         throw err
-      } finally {
-        clearTimeout(timeoutId)
       }
     })
   }
@@ -936,6 +934,56 @@ export class PipelineProcessor {
     progress: ProgressReporter,
     errors: UnitError[],
   ): Promise<U[]> {
+    const parallel = (options.parallel ?? true) && plugin.capabilities.parallel && units.length > 1
+
+    if (parallel) {
+      // Check for cancellation before starting parallel work
+      throwIfAborted(options.signal, 'analyze')
+
+      const results = await Promise.allSettled(
+        units.map((unit) => plugin.analyzeUnit(unit, doc, options as Record<string, unknown>)),
+      )
+
+      const analyzed: U[] = []
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i]
+        if (result.status === 'fulfilled') {
+          analyzed.push(result.value)
+        } else {
+          // Re-throw AbortError — don't treat as recoverable
+          if (isAbortError(result.reason)) {
+            throw result.reason
+          }
+
+          const error: UnitError = {
+            unitIndex: units[i].index,
+            phase: 'analyze',
+            message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            cause: result.reason instanceof Error ? result.reason : undefined,
+          }
+
+          if (options.strict) {
+            throw wrapError(result.reason, 'analyze', `Failed to analyze unit ${units[i].index}`)
+          }
+
+          errors.push(error)
+          progress.error('analyze', error, units[i].index)
+
+          // Mark unit as unknown and include it
+          analyzed.push({
+            ...units[i],
+            kind: 'unknown',
+            error,
+          } as U)
+        }
+
+        progress.analyzeUnit(units[i].index, units.length)
+      }
+
+      return analyzed
+    }
+
+    // Sequential analysis
     const analyzed: U[] = []
 
     for (const unit of units) {
@@ -946,6 +994,11 @@ export class PipelineProcessor {
         const result = await plugin.analyzeUnit(unit, doc, options as Record<string, unknown>)
         analyzed.push(result)
       } catch (err) {
+        // Always re-throw AbortError
+        if (isAbortError(err)) {
+          throw err
+        }
+
         const error: UnitError = {
           unitIndex: unit.index,
           phase: 'analyze',

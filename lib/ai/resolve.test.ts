@@ -1,4 +1,7 @@
+import { _resetRegistryCache } from './models.js'
 import { ResolveModelError, resolveModel } from './resolve.js'
+
+beforeAll(() => _resetRegistryCache())
 
 describe('resolveModel', () => {
   describe('2-segment parsing', () => {
@@ -22,6 +25,14 @@ describe('resolveModel', () => {
       expect(result.provider).toBe('google')
       expect(result.modelId).toBe('gemini-3-flash-preview')
       expect(result.encoding).toBe('gemini')
+    })
+
+    it('resolves azure:my-deployment (unknown model, valid provider)', () => {
+      const result = resolveModel('azure:my-deployment')
+      expect(result.provider).toBe('azure')
+      expect(result.modelId).toBe('my-deployment')
+      expect(result.modelConfig).toBeNull()
+      expect(result.encoding).toBe('o200k_base')
     })
   })
 
@@ -167,9 +178,9 @@ describe('resolveModel', () => {
     })
 
     it('throws UNKNOWN_PROVIDER', () => {
-      expect(() => resolveModel('azure:gpt-4')).toThrow(ResolveModelError)
+      expect(() => resolveModel('fakeprovider:gpt-4')).toThrow(ResolveModelError)
       try {
-        resolveModel('azure:gpt-4')
+        resolveModel('fakeprovider:gpt-4')
       } catch (err) {
         expect((err as ResolveModelError).code).toBe('UNKNOWN_PROVIDER')
       }

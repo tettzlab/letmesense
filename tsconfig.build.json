@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "exclude": [
+    "node_modules",
+    "dist",
+    "scripts",
+    "samples",
+    "letmesense-py",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "lib/testing"
+  ],
+  "compilerOptions": {
+    "declaration": true,
+    "declarationMap": false
+  }
+}

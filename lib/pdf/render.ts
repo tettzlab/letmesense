@@ -143,8 +143,7 @@ export class PageRenderer {
       canvas: this.canvas as unknown as HTMLCanvasElement,
     }).promise
 
-    // Get image data (only the rendered area, not full canvas)
-    // Note: toBuffer gets full canvas, but that's fine for our use case
+    // toBuffer encodes the full canvas; rendered area fills width×height pixels
     const buffer =
       format === 'jpeg'
         ? this.canvas.toBuffer('image/jpeg', options?.quality ?? 85)

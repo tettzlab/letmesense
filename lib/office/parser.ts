@@ -262,10 +262,14 @@ export function extractTextFromNodes(nodes: ContentNode[], delimiter = '\n'): st
 
 /**
  * Count characters in content nodes (excluding whitespace).
+ * Skips leaf 'text' nodes since their content is already in parent nodes' text property.
  */
 export function countCharsInNodes(nodes: ContentNode[]): number {
   let count = 0
   for (const node of walkContentNodes(nodes)) {
+    // Skip leaf 'text' nodes - their content is already in parent nodes' text
+    if (node.type === 'text') continue
+
     if (node.text) {
       count += node.text.replace(/\s/g, '').length
     }

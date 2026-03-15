@@ -9,8 +9,10 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
+import { SemanticAttributes } from '../observability/types.js'
 import type { FormatPlugin, LoadedDocument, ParsedDocument } from '../pipeline/plugin.js'
 import type { ContentKind, DocumentUnit, FormatId } from '../pipeline/types.js'
+import { createPathResolver } from '../utils/path.js'
 
 // ─── Document Unit Factory ───────────────────────────────────────────────────
 
@@ -90,17 +92,17 @@ export function createMockPlugin(overrides: Partial<FormatPlugin> = {}): FormatP
  *   vi.mock('./signals.js', () => mockSignals({ Spans: {...}, Metrics: {...} }))
  */
 export function mockObs(extra: Record<string, unknown> = {}) {
-  const startSpan = vi.fn(async (_name: string, fn: (span: unknown) => unknown) =>
-    fn({
+  const startSpan = vi.fn(async (...args: unknown[]) => {
+    const fn = args[args.length - 1] as (span: unknown) => unknown
+    return fn({
       setAttribute: vi.fn(),
       setAttributes: vi.fn(),
-      setStatus: vi.fn(),
       setError: vi.fn(),
       recordException: vi.fn(),
       addEvent: vi.fn(),
       end: vi.fn(),
-    }),
-  )
+    })
+  })
   return {
     obs: vi.fn(() => ({
       logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -111,14 +113,7 @@ export function mockObs(extra: Record<string, unknown> = {}) {
         gauge: vi.fn(() => ({ set: vi.fn(), get: vi.fn() })),
       },
     })),
-    SemanticAttributes: {
-      MODEL: 'model',
-      PROVIDER: 'provider',
-      INPUT_TOKENS: 'input.tokens',
-      OUTPUT_TOKENS: 'output.tokens',
-      ATTEMPTS: 'attempts',
-      SUCCESS: 'success',
-    },
+    SemanticAttributes,
     classifyError: () => ({ category: 'unknown', retryable: false }),
     getErrorSpanAttributes: () => ({}),
     // Audit stubs — always included so agent tests don't need to list them
@@ -170,12 +165,14 @@ export interface TmpDir {
 export function useTmpDir(prefix = 'test-', scope: 'each' | 'all' = 'each'): TmpDir {
   let dir = ''
   let resolver: (p: string) => string = () => {
-    throw new Error('useTmpDir: accessed before setup')
+    throw new Error(
+      'useTmpDir.resolve accessed before setup — call useTmpDir() inside a describe block so beforeEach/beforeAll can run first',
+    )
   }
 
   const setup = async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix))
-    resolver = (p: string) => path.resolve(dir, p)
+    resolver = createPathResolver(dir)
   }
   const teardown = async () => {
     await fs.rm(dir, { recursive: true, force: true })

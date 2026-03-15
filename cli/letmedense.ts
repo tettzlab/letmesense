@@ -16,21 +16,31 @@ if (process.argv.includes('--dotenv')) {
 }
 
 import fs from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { program } from 'commander'
-import pino from 'pino'
 import type {
   ChunkStrategy,
   CondenseOptions,
   CondenseProgressEvent,
 } from '../lib/condense/index.js'
-import type { Observability, ObservabilityFactory, Span } from '../lib/observability/index.js'
+import type { Observability, ObservabilityFactory } from '../lib/observability/index.js'
 import {
   createObservability,
   SemanticAttributes,
   setObservabilityFactory,
 } from '../lib/observability/index.js'
+import { createNoopObservabilityFactory } from './noop-obs.js'
+import {
+  CliError,
+  EXIT_INPUT_ERROR,
+  EXIT_PROCESSING_ERROR,
+  EXIT_SUCCESS,
+  getBundledModelsPath,
+  initModelsAction,
+  log,
+  readStdin,
+  readVersion,
+  validateOutputPath,
+} from './shared.js'
 import { Metrics, Spans } from './signals.js'
 
 // ============================================================================
@@ -47,56 +57,7 @@ const cliObsFactory: ObservabilityFactory = otelEnabled
       logLevel: process.env.LOG_LEVEL ?? 'warn',
       telemetryEnabled: true,
     })
-  : createNoopObservabilityFactory()
-
-function createNoopObservabilityFactory(): ObservabilityFactory {
-  const stderrLogger = pino(
-    {
-      level: process.env.LOG_LEVEL ?? 'warn',
-      base: { service: 'letmedense' },
-    },
-    pino.destination({ dest: 2, sync: true }),
-  )
-
-  return {
-    async init() {},
-    async shutdown() {},
-    create(domain: string) {
-      return {
-        logger: stderrLogger.child({ domain }),
-        tracer: {
-          async startSpan<T>(_name: string, fn: (span: Span) => Promise<T>): Promise<T> {
-            const span: Span = {
-              setAttribute() {},
-              setAttributes() {},
-              recordException() {},
-              setError() {},
-              addEvent() {},
-              end() {},
-            }
-            return fn(span)
-          },
-        },
-        metrics: {
-          counter() {
-            return { add() {} }
-          },
-          histogram() {
-            return { record() {} }
-          },
-          gauge() {
-            return {
-              set() {},
-              get() {
-                return 0
-              },
-            }
-          },
-        },
-      }
-    },
-  }
-}
+  : createNoopObservabilityFactory('letmedense')
 
 setObservabilityFactory(cliObsFactory)
 
@@ -112,70 +73,7 @@ async function shutdownObs(): Promise<void> {
 // Version
 // ============================================================================
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
-let VERSION = '0.0.0'
-try {
-  const packageJson = JSON.parse(
-    await fs.readFile(path.resolve(__dirname, '../package.json'), 'utf-8'),
-  )
-  VERSION = packageJson.version ?? '0.0.0'
-} catch {
-  // Fallback
-}
-
-// ============================================================================
-// Exit Codes
-// ============================================================================
-
-const EXIT_SUCCESS = 0
-const EXIT_INPUT_ERROR = 1
-const EXIT_PROCESSING_ERROR = 2
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-function log(message: string, quiet: boolean): void {
-  if (!quiet) {
-    console.error(message)
-  }
-}
-
-async function readStdin(): Promise<Buffer> {
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk as Buffer)
-  }
-  return Buffer.concat(chunks)
-}
-
-async function validateOutputPath(outputPath: string): Promise<void> {
-  try {
-    const outputStat = await fs.stat(outputPath)
-    if (outputStat.isDirectory()) {
-      console.error(`Error: Output path '${outputPath}' is a directory`)
-      process.exit(EXIT_INPUT_ERROR)
-    }
-  } catch {
-    // File doesn't exist yet
-  }
-
-  const parentDir = path.dirname(outputPath)
-  try {
-    const stat = await fs.stat(parentDir)
-    if (!stat.isDirectory()) {
-      console.error(`Error: Output path parent '${parentDir}' is not a directory`)
-      process.exit(EXIT_INPUT_ERROR)
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.error(`Error: Output directory '${parentDir}' does not exist`)
-      process.exit(EXIT_INPUT_ERROR)
-    }
-    throw err
-  }
-}
+const VERSION = await readVersion(import.meta.url)
 
 async function exitWithCode(
   code: number,
@@ -217,7 +115,7 @@ function parseEarlyArg(long: string, short?: string): string | undefined {
 // CLI flags take priority; env vars are checked inside loadModelsJson() as fallback.
 import { initModelRegistry } from '../lib/ai/models.js'
 
-const BUNDLED_MODELS_PATH = new URL('../models.json', import.meta.url).pathname
+const BUNDLED_MODELS_PATH = getBundledModelsPath(import.meta.url)
 const earlyModelsJson = parseEarlyArg('models-json')
 const earlyModelsFile = parseEarlyArg('models-file')
 
@@ -269,14 +167,29 @@ interface DenseCliOptions {
 }
 
 // ============================================================================
-// Main CLI
+// init-models subcommand
+// ============================================================================
+
+program.name('letmedense').description('Condense long text via LLM map-reduce').version(VERSION)
+
+program
+  .command('init-models')
+  .description('Generate a template models.json in the current directory')
+  .argument('[output]', 'Output path', 'models.json')
+  .option('--full', 'Copy the full bundled registry instead of a minimal template', false)
+  .action(
+    initModelsAction(
+      BUNDLED_MODELS_PATH,
+      'letmedense text.md --ratio 0.3 --models-file models.json',
+    ),
+  )
+
+// ============================================================================
+// Main command (default)
 // ============================================================================
 
 program
-  .name('letmedense')
-  .description('Condense long text via LLM map-reduce')
-  .version(VERSION)
-  .argument('<input>', 'File path or - for stdin')
+  .argument('[input]', 'File path or - for stdin')
 
   .option('--max-chars <n>', 'Target max character count', (v) =>
     parsePositiveInt(v, '--max-chars'),
@@ -315,7 +228,12 @@ Examples:
 `,
   )
 
-  .action(async (input: string, opts: DenseCliOptions) => {
+  .action(async (input: string | undefined, opts: DenseCliOptions) => {
+    if (!input) {
+      program.help()
+      return
+    }
+
     await cliObsFactory.init()
 
     const { logger, tracer, metrics } = getObs()
@@ -452,7 +370,8 @@ Examples:
       const message = err instanceof Error ? err.message : String(err)
       console.error(`Error: ${message}`)
       logger.error({ err, input }, 'Condense failed')
-      await exitWithCode(EXIT_PROCESSING_ERROR, metrics, startTime)
+      const exitCode = err instanceof CliError ? err.exitCode : EXIT_PROCESSING_ERROR
+      await exitWithCode(exitCode, metrics, startTime)
     }
   })
 

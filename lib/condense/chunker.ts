@@ -88,12 +88,22 @@ function parseSections(text: string): Section[] {
   const root: Section[] = []
   const stack: Section[] = []
   let inFence = false
+  let fenceMarker = ''
 
   for (const line of lines) {
     // Track fenced code blocks
     const fenceMatch = line.match(FENCE_RE)
     if (fenceMatch) {
-      inFence = !inFence
+      if (!inFence) {
+        inFence = true
+        fenceMarker = fenceMatch[1]
+      } else if (
+        fenceMatch[1][0] === fenceMarker[0] &&
+        fenceMatch[1].length >= fenceMarker.length
+      ) {
+        inFence = false
+        fenceMarker = ''
+      }
       appendLineToStack(stack, root, line)
       continue
     }

@@ -1,16 +1,2 @@
 letmesense
 Copyright 2025 tettz <https://github.com/tettzlab>
-
-This product includes software developed by third parties:
-
---------------------------------------------------------------------------------
-math.js (https://github.com/josdejong/mathjs)
-Copyright (C) 2013-2025 Jos de Jong <wjosdejong@gmail.com>
-Licensed under Apache License 2.0
---------------------------------------------------------------------------------
-
-License Choices for Dual-Licensed Packages:
-- jszip: MIT (chosen from MIT OR GPL-3.0-or-later)
-
-Dependency Notes:
-- xlsx: Pinned to 0.18.5 (last Apache-2.0 version before SheetJS went proprietary)

@@ -130,10 +130,7 @@ export async function formatPage(
     const response = await provider.format(request, config)
     const durationMs = Math.round(performance.now() - startTime)
 
-    // Record metrics
-    metrics
-      .counter(Metrics.REQUEST_COUNT)
-      .add(1, { provider: provider.name, model, status: 'success' })
+    // Record duration metric (REQUEST_COUNT is recorded in genericProvider.format)
     metrics.histogram(Metrics.TOKEN_INPUT_COUNT).record(response.usage.inputTokens)
     metrics.histogram(Metrics.TOKEN_OUTPUT_COUNT).record(response.usage.outputTokens)
     metrics.histogram(Metrics.REQUEST_DURATION_MS).record(durationMs)
@@ -141,7 +138,6 @@ export async function formatPage(
     // Calculate and record cost
     const pricing = provider.getPricing(model)
     const cost = calculateEntryCost(response.usage, pricing)
-    metrics.histogram(Metrics.COST_USD).record(cost.total)
 
     span.setAttribute(SemanticAttributes.INPUT_TOKENS, response.usage.inputTokens)
     span.setAttribute(SemanticAttributes.OUTPUT_TOKENS, response.usage.outputTokens)
@@ -234,10 +230,7 @@ export async function formatPageStream(
     const response = await provider.formatStream(request, config, onChunk)
     const durationMs = Math.round(performance.now() - startTime)
 
-    // Record metrics
-    metrics
-      .counter(Metrics.REQUEST_COUNT)
-      .add(1, { provider: provider.name, model, status: 'success' })
+    // Record duration metric (REQUEST_COUNT is recorded in genericProvider.formatStream)
     metrics.histogram(Metrics.TOKEN_INPUT_COUNT).record(response.usage.inputTokens)
     metrics.histogram(Metrics.TOKEN_OUTPUT_COUNT).record(response.usage.outputTokens)
     metrics.histogram(Metrics.REQUEST_DURATION_MS).record(durationMs)
@@ -245,7 +238,6 @@ export async function formatPageStream(
     // Calculate and record cost
     const pricing = provider.getPricing(model)
     const cost = calculateEntryCost(response.usage, pricing)
-    metrics.histogram(Metrics.COST_USD).record(cost.total)
 
     span.setAttribute(SemanticAttributes.INPUT_TOKENS, response.usage.inputTokens)
     span.setAttribute(SemanticAttributes.OUTPUT_TOKENS, response.usage.outputTokens)

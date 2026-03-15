@@ -13,7 +13,7 @@ import {
   type ProviderOptions,
   parseModelSpec,
 } from '../ai/config.js'
-import { estimateImageTokens, estimateTextTokens } from '../ai/cost.js'
+import { estimateTextTokens } from '../ai/cost.js'
 import { createModel } from '../ai/createModel.js'
 import { calculateEntryCost, createJournalEntry } from '../ai/journal.js'
 import { getProvider } from '../ai/provider.js'
@@ -146,9 +146,11 @@ function getApiKeyEnvVar(provider: ProviderId): string | null {
     case 'anthropic':
       return 'ANTHROPIC_API_KEY'
     case 'google':
-      return 'GOOGLE_GENERATIVE_AI_API_KEY'
+      return 'GOOGLE_API_KEY'
     case 'ollama':
       return null // Ollama is local, no API key needed
+    case 'azure':
+      return 'AZURE_OPENAI_API_KEY'
   }
 }
 
@@ -164,12 +166,17 @@ export function createVisionModel(modelSpec: string): CreateVisionModelResult {
   try {
     const spec = parseModelSpec(modelSpec)
 
-    // Check for API key
+    // Check for API key (support fallback env var for Google)
     const keyEnvVar = getApiKeyEnvVar(spec.provider)
     if (keyEnvVar && !process.env[keyEnvVar]) {
-      return {
-        model: null,
-        error: `Missing API key: Set ${keyEnvVar} environment variable`,
+      // Google supports legacy GOOGLE_GENERATIVE_AI_API_KEY as fallback
+      if (spec.provider === 'google' && process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+        // fallback accepted
+      } else {
+        return {
+          model: null,
+          error: `Missing API key: Set ${keyEnvVar} environment variable`,
+        }
       }
     }
 
@@ -290,6 +297,13 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
     const startTime = performance.now()
 
     try {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Vision analysis timed out')),
+          VISION_ANALYSIS_TIMEOUT_MS,
+        )
+      })
       const result = await Promise.race([
         generateText({
           model,
@@ -298,20 +312,16 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
               role: 'user',
               content: [
                 { type: 'text', text: fullPrompt },
-                { type: 'image', image: `data:${mimeType};base64,${imageData}` },
+                { type: 'image', image: Buffer.from(imageData, 'base64') },
               ],
             },
           ],
           maxOutputTokens: 4096,
           providerOptions,
         }),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Vision analysis timed out')),
-            VISION_ANALYSIS_TIMEOUT_MS,
-          ),
-        ),
+        timeoutPromise,
       ])
+      clearTimeout(timer)
 
       const durationMs = Math.round(performance.now() - startTime)
       const fullText = result.text ?? ''
@@ -331,8 +341,8 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
         const inputTokens = result.usage?.inputTokens ?? estimateTextTokens(fullPrompt)
         const outputTokens = result.usage?.outputTokens ?? estimateTextTokens(fullText)
         const totalTokens = result.usage?.totalTokens
-        // Image tokens are included in the inputTokens from the provider
-        void estimateImageTokens(width ?? 0, height ?? 0)
+        // OpenAI and Anthropic already include image tokens in the inputTokens they report,
+        // so no separate image-token estimation is needed here.
 
         // Build detailed token usage
         const rawUsage = (result.usage as { raw?: Record<string, unknown> } | undefined)?.raw
@@ -454,7 +464,7 @@ export async function* analyzeImageStreaming(
         role: 'user',
         content: [
           { type: 'text', text: fullPrompt },
-          { type: 'image', image: `data:${mimeType};base64,${imageData}` },
+          { type: 'image', image: Buffer.from(imageData, 'base64') },
         ],
       },
     ],
@@ -462,9 +472,16 @@ export async function* analyzeImageStreaming(
     providerOptions,
   })
 
-  for await (const chunk of streamResult.textStream) {
-    chunks.push(chunk)
-    yield chunk
+  try {
+    for await (const chunk of streamResult.textStream) {
+      chunks.push(chunk)
+      yield chunk
+    }
+  } catch (err) {
+    const durationMs = Math.round(performance.now() - startTime)
+    metrics.counter(Metrics.ANALYSIS_COUNT).add(1, { status: 'failure', streaming: 'true' })
+    metrics.histogram(Metrics.ANALYSIS_DURATION_MS).record(durationMs)
+    throw err
   }
 
   // Record metrics after stream completes
@@ -487,8 +504,8 @@ export async function* analyzeImageStreaming(
     const inputTokens = sdkUsage?.inputTokens ?? estimateTextTokens(fullPrompt)
     const outputTokens = sdkUsage?.outputTokens ?? estimateTextTokens(fullText)
     const totalTokens = sdkUsage?.totalTokens
-    // Image tokens are included in the inputTokens from the provider
-    void estimateImageTokens(width ?? 0, height ?? 0)
+    // OpenAI and Anthropic already include image tokens in the inputTokens they report,
+    // so no separate image-token estimation is needed here.
 
     // Build detailed token usage
     const rawUsage = (sdkUsage as { raw?: Record<string, unknown> } | undefined)?.raw

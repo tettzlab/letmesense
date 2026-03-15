@@ -24,7 +24,7 @@ async function getPdfjsLib() {
       // Set up Path2D from @napi-rs/canvas before pdfjs-dist loads.
       // pdfjs-dist checks globalThis.Path2D during initialization and uses it
       // for font rendering via ctx.fill(path). Without this, rendering fails with:
-      // "Error: Value is non of these types `String`, `Path`"
+      // "Error: Value is none of these types `String`, `Path`"
       if (!globalThis.Path2D) {
         const canvas = await import('@napi-rs/canvas')
         // Use type assertion - @napi-rs/canvas Path2D is compatible at runtime
@@ -72,6 +72,12 @@ export function getCMapUrl(): string {
   return dir + path.sep
 }
 
+export function getWasmUrl(): string {
+  // JPEG2000 (JPX) images require OpenJPEG WASM for decoding.
+  const dir = resolvePdfjsAssetDir('pdfjs-dist/wasm/openjpeg.wasm')
+  return dir + path.sep
+}
+
 export async function loadPdfDocumentFromBytes(pdfBytes: Uint8Array) {
   const { tracer, metrics, logger } = obs('pdf.pdfjs')
 
@@ -88,6 +94,8 @@ export async function loadPdfDocumentFromBytes(pdfBytes: Uint8Array) {
       standardFontDataUrl: getStandardFontDataUrl(),
       cMapUrl: getCMapUrl(),
       cMapPacked: true,
+      // JPEG2000 (JPX) image decoding via OpenJPEG WASM
+      wasmUrl: getWasmUrl(),
     }
     // biome-ignore lint/suspicious/noExplicitAny: pdfjs-dist type definition incomplete
     const loadingTask = pdfjs.getDocument(params as any)

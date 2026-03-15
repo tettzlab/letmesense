@@ -147,7 +147,7 @@ export function formatCostWarning(
   vision: boolean,
 ): string {
   const mode = vision ? 'vision (text + image)' : 'text-only'
-  return `⚠️  Estimated API cost: ~$${estimate.totalCost.toFixed(2)}
+  return `⚠️  Estimated API cost: ~$${estimate.totalCost.toFixed(2)} (approximate — actual charges may vary)
     Pages: ${pageCount}
     Mode: ${mode}
     Provider: ${capitalize(estimate.provider)} (${estimate.model})`

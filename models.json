@@ -24,9 +24,29 @@
       "name": "Ollama",
       "defaultModel": "llama3.3",
       "defaultVisionModel": "llama3.2-vision"
+    },
+    {
+      "id": "azure",
+      "name": "Azure OpenAI",
+      "defaultModel": "gpt-5-mini",
+      "defaultVisionModel": "gpt-5-mini"
     }
   ],
   "models": [
+    {
+      "id": "gpt-5.4",
+      "name": "GPT-5.4",
+      "provider": "openai",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "encoding": "o200k_base",
+      "aliases": ["gpt", "gpt5"],
+      "pricing": { "input": 1.75, "output": 14.0, "image": 1.75 },
+      "capabilities": {
+        "vision": true,
+        "reasoning": { "levels": ["none", "low", "medium", "high", "xhigh"], "default": "none" }
+      }
+    },
     {
       "id": "gpt-5.2",
       "name": "GPT-5.2",
@@ -34,7 +54,7 @@
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
       "encoding": "o200k_base",
-      "aliases": ["gpt", "gpt5"],
+      "aliases": ["gpt5.2"],
       "pricing": { "input": 1.75, "output": 14.0, "image": 1.75 },
       "capabilities": {
         "vision": true,
@@ -60,6 +80,64 @@
       "id": "gpt-5-nano",
       "name": "GPT-5 Nano",
       "provider": "openai",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "encoding": "o200k_base",
+      "aliases": ["nano"],
+      "freeTier": true,
+      "pricing": { "input": 0.05, "output": 0.4, "image": 0.05 },
+      "capabilities": {
+        "vision": true,
+        "reasoning": { "levels": ["minimal", "low", "medium", "high"], "default": "medium" }
+      }
+    },
+    {
+      "id": "gpt-5.4",
+      "name": "GPT-5.4",
+      "provider": "azure",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "encoding": "o200k_base",
+      "aliases": ["gpt", "gpt5"],
+      "pricing": { "input": 1.75, "output": 14.0, "image": 1.75 },
+      "capabilities": {
+        "vision": true,
+        "reasoning": { "levels": ["none", "low", "medium", "high", "xhigh"], "default": "none" }
+      }
+    },
+    {
+      "id": "gpt-5.2",
+      "name": "GPT-5.2",
+      "provider": "azure",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "encoding": "o200k_base",
+      "aliases": ["gpt5.2"],
+      "pricing": { "input": 1.75, "output": 14.0, "image": 1.75 },
+      "capabilities": {
+        "vision": true,
+        "reasoning": { "levels": ["none", "low", "medium", "high", "xhigh"], "default": "none" }
+      }
+    },
+    {
+      "id": "gpt-5-mini",
+      "name": "GPT-5 Mini",
+      "provider": "azure",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "encoding": "o200k_base",
+      "aliases": ["mini"],
+      "freeTier": true,
+      "pricing": { "input": 0.25, "output": 2.0, "image": 0.25 },
+      "capabilities": {
+        "vision": true,
+        "reasoning": { "levels": ["minimal", "low", "medium", "high"], "default": "medium" }
+      }
+    },
+    {
+      "id": "gpt-5-nano",
+      "name": "GPT-5 Nano",
+      "provider": "azure",
       "contextWindow": 400000,
       "maxOutputTokens": 128000,
       "encoding": "o200k_base",

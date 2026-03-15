@@ -1,6 +1,5 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "lefthook": false,
   "entry": [
     "cli/letmesense.ts",
     "cli/letmedense.ts",

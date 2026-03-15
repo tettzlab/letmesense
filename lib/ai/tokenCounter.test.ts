@@ -1,3 +1,4 @@
+import { _resetRegistryCache } from './models.js'
 import {
   countTokens,
   countTokensByProvider,
@@ -5,6 +6,8 @@ import {
   MSG_TOKEN_OVERHEAD,
 } from './tokenCounter.js'
 import { calculateMaxOutputTokens, getMaxOutputTokens, MIN_OUTPUT_TOKENS } from './tokens.js'
+
+beforeAll(() => _resetRegistryCache())
 
 describe('MSG_TOKEN_OVERHEAD', () => {
   it('is 4', () => {

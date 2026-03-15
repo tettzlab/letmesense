@@ -27,9 +27,7 @@ const DEFAULTS: Required<ClassifyOptions> = {
    * meaningful text. 20 chars filters pages with only page numbers,
    * minimal headers, or single-word footers.
    */
-  minCharsForTextPage: process.env.LETMESENSE_TEXT_THRESHOLD
-    ? parseInt(process.env.LETMESENSE_TEXT_THRESHOLD, 10)
-    : 20,
+  minCharsForTextPage: parseInt(process.env.LETMESENSE_TEXT_THRESHOLD ?? '', 10) || 20,
 
   /**
    * Image coverage threshold to classify as scanned-image (when no text).

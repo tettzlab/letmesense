@@ -4,6 +4,7 @@ import {
   getCMapUrl,
   getPdfjsLib,
   getStandardFontDataUrl,
+  getWasmUrl,
   loadPdfDocumentFromBytes,
 } from './pdfjs.js'
 import { getSafeOPS } from './pdfjsTypes.js'
@@ -56,6 +57,31 @@ describe('pdfjs module', () => {
       const url = getCMapUrl()
       expect(url).toContain('pdfjs-dist')
       expect(url).toContain('cmaps')
+    })
+  })
+
+  describe('getWasmUrl', () => {
+    it('returns a string path', () => {
+      const url = getWasmUrl()
+      expect(typeof url).toBe('string')
+      expect(url.length).toBeGreaterThan(0)
+    })
+
+    it('ends with path separator', () => {
+      const url = getWasmUrl()
+      expect(url.endsWith(path.sep)).toBe(true)
+    })
+
+    it('points to existing directory', async () => {
+      const url = getWasmUrl()
+      const stats = await fs.stat(url)
+      expect(stats.isDirectory()).toBe(true)
+    })
+
+    it('contains pdfjs-dist wasm directory', () => {
+      const url = getWasmUrl()
+      expect(url).toContain('pdfjs-dist')
+      expect(url).toContain('wasm')
     })
   })
 

@@ -30,6 +30,15 @@ vi.mock('@ai-sdk/google', () => ({
   })),
 }))
 
+vi.mock('@ai-sdk/azure', () => ({
+  createAzure: vi.fn(() =>
+    vi.fn((modelId: string) => ({
+      _type: 'azure',
+      modelId,
+    })),
+  ),
+}))
+
 // Mock observability - use the shared mockLogger
 vi.mock('../observability/index.js', () => ({
   obs: () => ({
@@ -38,6 +47,7 @@ vi.mock('../observability/index.js', () => ({
 }))
 
 import { anthropic } from '@ai-sdk/anthropic'
+import { createAzure } from '@ai-sdk/azure'
 import { google } from '@ai-sdk/google'
 import { openai } from '@ai-sdk/openai'
 import { ParseModelSpecError } from './config.js'
@@ -71,6 +81,16 @@ describe('registry.languageModel', () => {
       expect(google).toHaveBeenCalledWith('gemini-3-pro-preview')
       expect(model).toHaveProperty('_type', 'google')
       expect(model).toHaveProperty('modelId', 'gemini-3-pro-preview')
+    })
+
+    it('creates Azure model from spec', () => {
+      const model = registry.languageModel('azure:my-gpt4o-deployment')
+
+      expect(createAzure).toHaveBeenCalled()
+      const azureFactory = (createAzure as ReturnType<typeof vi.fn>).mock.results[0].value
+      expect(azureFactory).toHaveBeenCalledWith('my-gpt4o-deployment')
+      expect(model).toHaveProperty('_type', 'azure')
+      expect(model).toHaveProperty('modelId', 'my-gpt4o-deployment')
     })
   })
 
@@ -124,7 +144,7 @@ describe('registry.languageModel', () => {
     })
 
     it('throws for unknown provider', () => {
-      expect(() => registry.languageModel('azure:gpt-4' as `openai:${string}`)).toThrow(
+      expect(() => registry.languageModel('fakeprovider:gpt-4' as `openai:${string}`)).toThrow(
         ParseModelSpecError,
       )
     })

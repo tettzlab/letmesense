@@ -46,8 +46,10 @@ export class LibreOfficePool extends EventEmitter {
   private options: Required<PoolOptions>
   private profileDirs: string[] = []
   private queue: ConversionJob[] = []
+  private availableSlots: number[] = []
   private activeWorkers = 0
   private initialized = false
+  private initPromise: Promise<void> | null = null
   private shuttingDown = false
 
   // Statistics
@@ -78,6 +80,19 @@ export class LibreOfficePool extends EventEmitter {
   async initialize(): Promise<void> {
     if (this.initialized) return
 
+    // Guard against concurrent initialization from multiple convert() calls
+    if (this.initPromise) return this.initPromise
+
+    this.initPromise = this.doInitialize()
+    try {
+      await this.initPromise
+    } catch (err) {
+      this.initPromise = null
+      throw err
+    }
+  }
+
+  private async doInitialize(): Promise<void> {
     // Check LibreOffice availability
     const status = checkLibreOffice()
     if (!status.available) {
@@ -94,6 +109,9 @@ export class LibreOfficePool extends EventEmitter {
       await mkdir(profileDir, { recursive: true })
       this.profileDirs.push(profileDir)
     }
+
+    // Populate available worker slots
+    this.availableSlots = Array.from({ length: this.options.poolSize }, (_, i) => i)
 
     this.initialized = true
     this.emit('initialized', { poolSize: this.options.poolSize })
@@ -144,10 +162,11 @@ export class LibreOfficePool extends EventEmitter {
    */
   private async processQueue(): Promise<void> {
     if (this.shuttingDown) return
-    if (this.activeWorkers >= this.options.poolSize) return
+    if (this.availableSlots.length === 0) return
     const job = this.queue.shift()
     if (!job) return
-    const workerIndex = this.activeWorkers
+    const workerIndex = this.availableSlots.shift()
+    if (workerIndex === undefined) return
     this.activeWorkers++
     this.updateMetrics()
 
@@ -205,6 +224,7 @@ export class LibreOfficePool extends EventEmitter {
       })
     } finally {
       this.activeWorkers--
+      this.availableSlots.push(workerIndex)
       this.updateMetrics()
       // Process next job
       setImmediate(() => this.processQueue())
@@ -226,16 +246,25 @@ export class LibreOfficePool extends EventEmitter {
 
   /**
    * Wait for all queued jobs to complete.
+   * @param timeoutMs - Maximum time to wait in ms (default: 5 minutes)
    */
-  async drain(): Promise<void> {
+  async drain(timeoutMs = 300_000): Promise<void> {
     if (this.queue.length === 0 && this.activeWorkers === 0) {
       return
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs
       const check = () => {
         if (this.queue.length === 0 && this.activeWorkers === 0) {
           resolve()
+        } else if (Date.now() >= deadline) {
+          reject(
+            new OfficeConvertError(
+              `drain() timed out after ${timeoutMs}ms — ${this.activeWorkers} active workers, ` +
+                `${this.queue.length} queued jobs remain`,
+            ),
+          )
         } else {
           setTimeout(check, 100)
         }
@@ -268,7 +297,9 @@ export class LibreOfficePool extends EventEmitter {
     }
 
     this.profileDirs = []
+    this.availableSlots = []
     this.initialized = false
+    this.initPromise = null
     this.shuttingDown = false
 
     this.emit('shutdown', this.getStats())

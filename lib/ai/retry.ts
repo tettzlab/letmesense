@@ -187,7 +187,7 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }
     const onAbort = () => {
       clearTimeout(timer)
-      reject(signal?.reason)
+      reject(signal?.reason ?? new Error('Aborted'))
     }
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort)
@@ -213,16 +213,23 @@ export function withTimeout<T>(
   timeoutMs: number,
   operation: string,
 ): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`${operation} timed out after ${timeoutMs / 1000}s`))
-      }, timeoutMs)
-      // Prevent timer from keeping Node process alive
-      timer.unref?.()
-    }),
-  ])
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${operation} timed out after ${timeoutMs / 1000}s`))
+    }, timeoutMs)
+    // Prevent timer from keeping Node process alive
+    timer.unref?.()
+    promise.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
 }
 
 // ============================================================================
@@ -236,12 +243,10 @@ export function withTimeout<T>(
  * have been sent to the caller, retrying would produce duplicate content.
  */
 export class AbortRetryError extends Error {
-  readonly cause?: unknown
   constructor(cause?: unknown) {
     const msg = cause instanceof Error ? cause.message : String(cause ?? 'Retry aborted')
-    super(msg)
+    super(msg, { cause })
     this.name = 'AbortRetryError'
-    this.cause = cause
   }
 }
 

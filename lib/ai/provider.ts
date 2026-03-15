@@ -27,10 +27,10 @@ export function getAllProviders(): LlmProvider[] {
 
 /**
  * Auto-detect the best available provider
- * Priority: OpenAI → Anthropic → Google → Ollama
+ * Priority: OpenAI → Azure → Anthropic → Google → Ollama
  */
 export function detectProvider(): DetectedProvider | null {
-  const priority: ProviderId[] = ['openai', 'anthropic', 'google', 'ollama']
+  const priority: ProviderId[] = ['openai', 'azure', 'anthropic', 'google', 'ollama']
 
   for (const name of priority) {
     const provider = providers.get(name)
@@ -56,14 +56,16 @@ export function resolveProvider(config?: Partial<LlmConfig>): LlmProvider {
     if (!provider) {
       throw new Error(
         `Unknown LLM provider: ${config.provider}\n\n` +
-          `Available providers: openai, anthropic, google, ollama`,
+          `Available providers: openai, azure, anthropic, google, ollama`,
       )
     }
     if (!provider.isAvailable()) {
       const envHints: Record<string, string> = {
         openai: 'export OPENAI_API_KEY="sk-..."',
+        azure:
+          'export AZURE_OPENAI_API_KEY="..." && export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com"',
         anthropic: 'export ANTHROPIC_API_KEY="sk-ant-..."',
-        google: 'export GOOGLE_GENERATIVE_AI_API_KEY="..."',
+        google: 'export GOOGLE_API_KEY="..."',
         ollama:
           'export OLLAMA_HOST="http://localhost:11434"  # then: ollama serve && ollama pull llama3.2',
       }
@@ -81,8 +83,9 @@ export function resolveProvider(config?: Partial<LlmConfig>): LlmProvider {
       `No LLM provider available.\n\n` +
         `Configure at least one provider via environment variables:\n\n` +
         `  OpenAI:     export OPENAI_API_KEY="sk-..."\n` +
+        `  Azure:      export AZURE_OPENAI_API_KEY="..." && export AZURE_OPENAI_ENDPOINT="..."\n` +
         `  Anthropic:  export ANTHROPIC_API_KEY="sk-ant-..."\n` +
-        `  Google:     export GOOGLE_GENERATIVE_AI_API_KEY="..."\n` +
+        `  Google:     export GOOGLE_API_KEY="..."\n` +
         `  Ollama:     ollama serve  (runs locally, no key needed)\n\n` +
         `Or specify a provider and model explicitly with --model <provider>:<model>`,
     )

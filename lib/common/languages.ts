@@ -38,7 +38,7 @@ export type TesseractLang = (typeof ISO_TO_TESSERACT)[SupportedOcrLang]
  * Type guard that narrows Lang to SupportedOcrLang.
  */
 export function isSupportedOcrLang(lang: Lang): lang is SupportedOcrLang {
-  return lang in ISO_TO_TESSERACT
+  return lang != null && lang in ISO_TO_TESSERACT
 }
 
 /**

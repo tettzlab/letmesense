@@ -26,7 +26,7 @@ describe('getProviderConfig', () => {
   })
 
   it('throws for unknown provider', () => {
-    expect(() => getProviderConfig('azure' as 'openai')).toThrow('Unknown provider')
+    expect(() => getProviderConfig('fakeprovider' as 'openai')).toThrow('Unknown provider')
   })
 })
 
@@ -89,5 +89,23 @@ describe('getDefaultEncoding', () => {
     expect(getDefaultEncoding('anthropic')).toBe('claude')
     expect(getDefaultEncoding('google')).toBe('gemini')
     expect(getDefaultEncoding('ollama')).toBe('llama3')
+    expect(getDefaultEncoding('azure')).toBe('o200k_base')
+  })
+})
+
+describe('azure provider', () => {
+  it('returns provider config', () => {
+    const cfg = getProviderConfig('azure')
+    expect(cfg.id).toBe('azure')
+    expect(cfg.name).toBe('Azure OpenAI')
+    expect(cfg.defaultModel).toBe('gpt-5-mini')
+  })
+
+  it('returns azure model list', () => {
+    expect(getModelsByProvider('azure')).toHaveLength(4)
+  })
+
+  it('passes through unknown alias as-is', () => {
+    expect(resolveModelAlias('azure', 'my-deployment')).toBe('my-deployment')
   })
 })

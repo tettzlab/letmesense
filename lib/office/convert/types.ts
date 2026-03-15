@@ -26,6 +26,9 @@ export interface ConvertOptions {
 
   /** Keep temporary files for debugging */
   keepTemp?: boolean
+
+  /** Number of retry attempts for transient OS-level failures (default: 2) */
+  retries?: number
 }
 
 /** Options for the worker pool */

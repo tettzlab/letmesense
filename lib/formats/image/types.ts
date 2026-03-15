@@ -155,7 +155,9 @@ export function getMimeType(format: ImageFormat): string {
  * Detect image format from file extension.
  */
 export function detectImageFormat(filePath: string): ImageFormat | null {
-  const ext = filePath.toLowerCase().split('.').pop()
+  // Strip query string and fragment so URLs like "img.png?id=123" resolve correctly
+  const cleaned = filePath.split('?')[0].split('#')[0]
+  const ext = cleaned.toLowerCase().split('.').pop()
   const formatMap: Record<string, ImageFormat> = {
     png: 'png',
     jpg: 'jpg',
