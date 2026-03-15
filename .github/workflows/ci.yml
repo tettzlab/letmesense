@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e11487 # v4
+
+      - uses: pnpm/action-setup@5b4374b0 # v4
+
+      - uses: actions/setup-node@49933ea5 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck & Lint
+        run: pnpm validate:static
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e11487 # v4
+
+      - uses: pnpm/action-setup@5b4374b0 # v4
+
+      - uses: actions/setup-node@49933ea5 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e11487 # v4
+
+      - uses: pnpm/action-setup@5b4374b0 # v4
+
+      - uses: actions/setup-node@49933ea5 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test
+        run: pnpm test
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e11487 # v4
+
+      - uses: pnpm/action-setup@5b4374b0 # v4
+
+      - uses: actions/setup-node@49933ea5 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit dependencies
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Check licenses
+        run: ./scripts/check-licenses.sh
