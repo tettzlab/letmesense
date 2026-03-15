@@ -4,7 +4,7 @@
 # Then run CLI with OTEL:
 #   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 letmesense document.pdf
 #
-# View in Grafana: http://localhost:3000 (admin/admin)
+# View in Grafana: http://localhost:3000
 #   - Explore → Tempo for traces
 #   - Explore → Loki for logs
 #   - Explore → Mimir for metrics
