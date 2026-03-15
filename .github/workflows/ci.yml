@@ -10,11 +10,11 @@ jobs:
   static-checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e11487 # v4
+      - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@5b4374b0 # v4
+      - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@49933ea5 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
@@ -28,11 +28,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e11487 # v4
+      - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@5b4374b0 # v4
+      - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@49933ea5 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
@@ -46,11 +46,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e11487 # v4
+      - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@5b4374b0 # v4
+      - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@49933ea5 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
@@ -64,11 +64,11 @@ jobs:
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e11487 # v4
+      - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@5b4374b0 # v4
+      - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@49933ea5 # v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
