@@ -1,6 +1,6 @@
 {
   "include": ["**/*"],
-  "exclude": ["node_modules", "dist", "samples", "letmesense-py"],
+  "exclude": ["node_modules", "dist", "samples"],
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "types": ["node", "vite/client", "vitest/globals"],

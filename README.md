@@ -16,24 +16,13 @@ Extract text from PDFs and Office documents with automatic OCR fallback and opti
 
 This library analyzes each page, groups consecutive pages with the same characteristics into "runs", and extracts text using the optimal strategy for each run.
 
-## Implementations
-
-| | TypeScript | Python |
-|--|------------|--------|
-| Directory | `/` (root) | `letmesense-py/` |
-| Runtime | Node.js ≥24 | Python ≥3.11 |
-| Package manager | pnpm | uv |
-| LLM abstraction | Vercel AI SDK | PydanticAI |
-
-Both implementations share the same architecture, CLI interface, and feature set.
-
 ## Features
 
 | Feature | Description |
 |---------|-------------|
 | **Smart Classification** | Detect `born-digital`, `scanned-image`, `mixed`, or `empty` pages |
 | **Run Splitting** | Group consecutive pages by kind, paper size, orientation, language |
-| **Automatic OCR** | PDF.js/Tesseract.js (TS) or pypdf/pytesseract (Py) |
+| **Automatic OCR** | PDF.js + Tesseract.js |
 | **Office Support** | DOCX, PPTX, XLSX, ODT, ODP, ODS |
 | **Image Support** | PNG, JPG, GIF, WebP, SVG |
 | **HTML/Web Support** | Local HTML files and remote URLs (Readability + Turndown) |
@@ -45,13 +34,8 @@ Both implementations share the same architecture, CLI interface, and feature set
 ## Quick Start
 
 ```bash
-# TypeScript
 pnpm install && pnpm build
 pnpm cli document.pdf
-
-# Python
-cd letmesense-py && uv sync
-uv run letmesense document.pdf
 ```
 
 ## CLI
@@ -261,8 +245,6 @@ See the bundled [`models.json`](models.json) for the full list.
 
 ## Programmatic API
 
-### TypeScript
-
 ```typescript
 import { sense } from 'letmesense'
 
@@ -276,44 +258,17 @@ const formatted = await sense('document.pdf', { llm: true })
 const vision = await sense('document.pdf', { vision: true })
 ```
 
-### Python
-
-```python
-from letmesense import sense, SenseOptions
-
-result = await sense("document.pdf")
-print(result.text)
-
-# With LLM formatting
-formatted = await sense("document.pdf", SenseOptions(mode="llm"))
-
-# Vision mode
-vision = await sense("document.pdf", SenseOptions(mode="vision"))
-```
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding standards, and pull request guidelines.
 
 ## Development
 
-### TypeScript
-
 ```bash
 pnpm validate          # typecheck + lint + test
 pnpm test              # Fast tests
 pnpm test:full         # All tests
 pnpm lint:fix          # Auto-fix
-```
-
-### Python
-
-```bash
-cd letmesense-py
-uv run task validate   # typecheck + lint + test
-uv run task test       # Fast tests
-uv run task test:full  # All tests
-uv run task lint:fix   # Auto-fix
 ```
 
 ## Installation Notes
@@ -377,20 +332,11 @@ soffice --version
 
 Vision mode (`--vision`) on PDFs and web pages uses [Playwright](https://playwright.dev/) to render pages as images in a headless Chromium browser. This provides accurate font rendering for all scripts including CJK.
 
-**TypeScript**
-
 ```bash
 npx playwright install
 ```
 
-**Python**
-
-```bash
-pip install 'letmesense[browser]'
-playwright install
-```
-
-Without Playwright browsers installed, PDF vision mode falls back to `@napi-rs/canvas` rendering (TS only), which may produce poor results for CJK text. Web page vision mode requires Playwright. The `--playwright` flag controls this behavior:
+Without Playwright browsers installed, PDF vision mode falls back to `@napi-rs/canvas` rendering, which may produce poor results for CJK text. Web page vision mode requires Playwright. The `--playwright` flag controls this behavior:
 
 | Value | Behavior |
 |-------|----------|
@@ -400,9 +346,7 @@ Without Playwright browsers installed, PDF vision mode falls back to `@napi-rs/c
 
 ### Offline OCR
 
-Download tessdata files to `tessdata/`:
-- TypeScript: `*.traineddata.gz` (compressed)
-- Python: `*.traineddata` (uncompressed)
+Download `*.traineddata.gz` files to `tessdata/`.
 
 ## License
 
