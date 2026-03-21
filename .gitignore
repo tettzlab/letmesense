@@ -37,7 +37,9 @@ CLAUDE.md
 Thumbs.db
 .fuse_hidden*
 
-# Generated test fixtures (recreate with generate-image-fixtures.ts)
+# Generated test fixtures (recreated by vitest globalSetup)
+samples/*.pdf
+lib/office/fixtures/sample.*
 cli/fixtures/*.png
 cli/fixtures/*.jpg
 cli/fixtures/*.gif

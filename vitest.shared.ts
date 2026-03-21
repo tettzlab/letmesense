@@ -3,6 +3,8 @@
  * Centralizes common options to avoid duplication.
  */
 
+export const globalSetup = './vitest.globalSetup.ts'
+
 export const baseTestConfig = {
   globals: true,
   pool: 'threads' as const,

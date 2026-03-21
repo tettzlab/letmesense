@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config'
-import { baseTestConfig, coverageConfig, defaultExclude } from './vitest.shared'
+import { baseTestConfig, coverageConfig, defaultExclude, globalSetup } from './vitest.shared'
 
 /**
  * Default vitest configuration - fast tests for regular development.
@@ -14,6 +14,7 @@ import { baseTestConfig, coverageConfig, defaultExclude } from './vitest.shared'
 export default defineConfig({
   test: {
     ...baseTestConfig,
+    globalSetup,
     include: ['lib/**/*.test.ts'],
     exclude: [...defaultExclude, 'lib/office/vision/**/*.test.ts'],
     testTimeout: 5000,

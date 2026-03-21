@@ -81,7 +81,7 @@
     "otel:logs": "docker compose logs -f",
     "otel:open": "open http://localhost:3000 || xdg-open http://localhost:3000 || start http://localhost:3000",
     "otel:cli": "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 tsx cli/letmesense.ts",
-    "fixtures:generate": "tsx cli/fixtures/generate-image-fixtures.ts",
+    "fixtures:generate": "tsx samples/generate-fixtures.ts && tsx lib/office/fixtures/generate-fixtures.ts && tsx cli/fixtures/generate-image-fixtures.ts",
     "format": "biome format --write",
     "lint": "biome check",
     "lint:fix": "biome check --write",

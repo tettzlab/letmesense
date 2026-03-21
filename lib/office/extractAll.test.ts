@@ -23,8 +23,8 @@ describe('extractFromOffice', () => {
 
       // Check for expected content
       expect(result.text).toContain('Slide 1')
-      expect(result.text).toContain('Test ODP Presentation')
-      expect(result.text).toContain('First slide content')
+      expect(result.text).toContain('Test Presentation')
+      expect(result.text).toContain('the first slide content')
     })
 
     it('extracts Unicode content correctly', async () => {

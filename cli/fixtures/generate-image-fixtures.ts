@@ -2,8 +2,8 @@
  * Script to generate test image fixtures for E2E tests.
  * Run with: pnpm tsx cli/fixtures/generate-image-fixtures.ts
  *
- * These fixtures are committed to the repo so tests don't need to
- * generate images at runtime, significantly speeding up test execution.
+ * These fixtures are generated before tests via vitest globalSetup.
+ * They are gitignored and not committed to the repo.
  */
 
 import fs from 'node:fs/promises'
@@ -165,4 +165,10 @@ async function main() {
   console.log('Done! Generated fixtures in', FIXTURES_DIR)
 }
 
-main().catch(console.error)
+export { main as generate }
+
+// Self-execute when run directly
+const scriptArg = process.argv[1]
+if (scriptArg && import.meta.url === `file://${path.resolve(scriptArg)}`) {
+  main().catch(console.error)
+}
