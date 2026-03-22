@@ -18,6 +18,9 @@ export const baseTestConfig = {
   },
 }
 
+/** Disable automatic .env file loading during tests. */
+export const envDir = false as const
+
 export const defaultExclude = ['**/node_modules/**', '**/.git/**']
 
 export const coverageConfig = {

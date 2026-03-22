@@ -1,5 +1,11 @@
 import { defineConfig } from 'vitest/config'
-import { baseTestConfig, coverageConfig, defaultExclude, globalSetup } from './vitest.shared'
+import {
+  baseTestConfig,
+  coverageConfig,
+  defaultExclude,
+  envDir,
+  globalSetup,
+} from './vitest.shared'
 
 /**
  * Default vitest configuration - fast tests for regular development.
@@ -12,6 +18,7 @@ import { baseTestConfig, coverageConfig, defaultExclude, globalSetup } from './v
  *   pnpm test:full:cov → all tests with coverage
  */
 export default defineConfig({
+  envDir,
   test: {
     ...baseTestConfig,
     globalSetup,
