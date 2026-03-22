@@ -210,7 +210,6 @@ function generateRenderHtml(
 
 async function startServer(html: string): Promise<{ server: Server; port: number }> {
   return new Promise((resolve) => {
-    // DeepCode ignore HttpToHttps: localhost-only ephemeral server for headless Playwright
     const server = createServer((_, res) => {
       res.setHeader('Content-Type', 'text/html')
       res.end(html)

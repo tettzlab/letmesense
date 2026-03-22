@@ -166,8 +166,6 @@ async function launchOrThrow(chromiumLib: NonNullable<typeof chromium>, args: st
 
 export async function startServer(html: string): Promise<{ server: Server; port: number }> {
   return new Promise((resolve, reject) => {
-    // DeepCode ignore HttpToHttps: localhost-only ephemeral server for headless Playwright
-    // DeepCode ignore XSS: html is served to a local headless browser, not to users
     const server = createServer((_, res) => {
       res.setHeader('Content-Type', 'text/html; charset=utf-8')
       res.end(html)

@@ -208,7 +208,6 @@ describe('buildConfig', () => {
 
   it('includes partial config values', () => {
     const config = buildConfig(mockProvider, {
-      // DeepCode ignore HardcodedNonCryptoSecret/test: dummy test fixture, not a real key
       apiKey: 'test-key',
       baseUrl: 'https://custom.api',
       timeout: 30_000,
