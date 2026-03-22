@@ -102,6 +102,7 @@ Each module owns a dotted prefix. All span and metric values must stay within th
 | `lib/ocr/` | `ocr.*` |
 | `lib/formats/pdf/` | `pdf.plugin.*` |
 | `lib/formats/office/` | `office.plugin.*` |
+| `lib/images/` | `image.*` |
 | `lib/formats/image/` | `image.plugin.*` |
 | `lib/formats/web/` | `web.plugin.*` |
 | `cli/` | `cli.*` |

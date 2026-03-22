@@ -87,6 +87,30 @@ letmesense <input> [options]
 | `--journal-dir <path>` | Journal directory (default: `./experiments`) |
 | `--journal-format <fmt>` | Journal format: `markdown` (default) or `jsonl` |
 
+### Office options
+
+| Flag | Description |
+|------|-------------|
+| `--include-notes` | Include speaker notes (PPTX) |
+| `--slides <range>` | Slide range (e.g. `1-5,7,9-12`) |
+| `--sheets <names>` | Sheet names (comma-separated) |
+| `--headers` | Treat first row as headers (XLSX) |
+| `--max-rows <n>` | Max rows for tabular output (default: 50) |
+
+### Image options
+
+| Flag | Description |
+|------|-------------|
+| `--max-dimension <n>` | Max image dimension (default: 1024) |
+| `--quality <n>` | JPEG/WebP quality (default: 85) |
+
+### HTML/Web options
+
+| Flag | Description |
+|------|-------------|
+| `--no-links` | Strip links, keep text only |
+| `--no-images` | Strip images from output |
+
 ### Examples
 
 ```bash
@@ -169,6 +193,7 @@ cat document.md | letmedense - --max-chars 2000 --json
 | Anthropic | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5 | All |
 | Google | gemini-3-pro-preview, gemini-3-flash-preview, gemini-2.5-pro, gemini-2.5-flash | All |
 | Ollama | llama3.3, qwen2.5 | llama3.2-vision |
+| Azure OpenAI | gpt-5.4, gpt-5.2, gpt-5-mini, gpt-5-nano | All |
 
 Model spec format: `provider:alias[:effort]` (e.g. `openai:mini`, `anthropic:sonnet:high`).
 
@@ -178,6 +203,8 @@ Set API keys:
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
 export GOOGLE_API_KEY=...
+export AZURE_OPENAI_API_KEY=...
+export AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
 ```
 
 Provider auto-detects from available keys. Use `-m provider:alias` to override.
