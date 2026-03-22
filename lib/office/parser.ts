@@ -8,7 +8,7 @@ import officeParser from 'officeparser'
 import { obs } from '../observability/index.js'
 import { OfficeParseError } from './errors.js'
 import { Metrics, Spans } from './signals.js'
-import type { DocumentMetadata, OfficeFormat } from './types.js'
+import { type DocumentMetadata, type OfficeFormat, ZIP_MAGIC } from './types.js'
 
 // ============================================================================
 // OfficeParser v6 Types (based on library API)
@@ -190,6 +190,15 @@ export async function parseOfficeBuffer(
 
     const opts = { ...DEFAULT_PARSE_OPTIONS, ...options }
     const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer)
+
+    // Reject non-ZIP payloads before they reach officeparser's file-type
+    // detection, which is vulnerable to infinite loops on crafted ASF data
+    // (SNYK-JS-FILETYPE-15456217).
+    if (buf.length < 4 || !ZIP_MAGIC.every((b, i) => buf[i] === b)) {
+      throw new OfficeParseError(
+        'Buffer does not contain a valid Office document (missing ZIP signature)',
+      )
+    }
 
     try {
       const ast = await officeParser.parseOffice(buf, {

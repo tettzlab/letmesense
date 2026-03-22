@@ -1,0 +1,9 @@
+# Snyk (https://snyk.io) policy file
+version: v1.25.0
+ignore:
+  SNYK-JS-FILETYPE-15456217:
+    - '*':
+        reason: >-
+          Mitigated: parseOfficeBuffer validates ZIP magic bytes before buffers
+          reach file-type's ASF parser. See lib/office/parser.ts.
+        expires: 2027-03-22T00:00:00.000Z

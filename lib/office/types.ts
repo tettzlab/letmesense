@@ -17,6 +17,9 @@ export type { ContentKind }
 // Core Types
 // ============================================================================
 
+/** ZIP local-file-header magic bytes (PK\x03\x04). All Office formats are ZIP archives. */
+export const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04] as const
+
 /** Supported Office document formats */
 export type OfficeFormat = 'docx' | 'pptx' | 'xlsx' | 'odt' | 'odp' | 'ods'
 

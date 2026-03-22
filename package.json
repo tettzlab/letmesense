@@ -141,6 +141,13 @@
     "turndown": "^7.2.2",
     "zod": "^4.3.6"
   },
+  "pnpm": {
+    "auditConfig": {
+      "ignoreCves": [
+        "CVE-2026-31808"
+      ]
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.7",
     "@playwright/mcp": "^0.0.68",

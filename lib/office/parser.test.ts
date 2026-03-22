@@ -5,8 +5,43 @@ import {
   extractTextFromNodes,
   findNodesByType,
   getTableData,
+  parseOfficeBuffer,
   walkContentNodes,
 } from './parser.js'
+
+vi.mock('../observability/index.js', () => ({
+  obs: () => ({
+    tracer: { startSpan: (_: string, fn: Function) => fn({ setAttribute: vi.fn() }) },
+    metrics: { counter: () => ({ add: vi.fn() }), histogram: () => ({ record: vi.fn() }) },
+    logger: { debug: vi.fn(), warn: vi.fn() },
+  }),
+  SemanticAttributes: {},
+}))
+
+vi.mock('./signals.js', () => ({
+  Spans: { PARSE_BUFFER: 'office.parse_buffer', PARSE_FILE: 'office.parse_file' },
+  Metrics: { DOCUMENT_PARSED_COUNT: 'office.document_parsed_count' },
+}))
+
+describe('parseOfficeBuffer', () => {
+  it('rejects non-ZIP buffers to mitigate file-type DoS (SNYK-JS-FILETYPE-15456217)', async () => {
+    // ASF magic bytes — the payload that triggers the infinite loop
+    const asfHeader = Buffer.from([
+      0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce,
+      0x6c,
+    ])
+    await expect(parseOfficeBuffer(asfHeader)).rejects.toThrow('missing ZIP signature')
+  })
+
+  it('rejects empty buffers', async () => {
+    await expect(parseOfficeBuffer(Buffer.alloc(0))).rejects.toThrow('missing ZIP signature')
+  })
+
+  it('rejects buffers with random bytes', async () => {
+    const random = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]) // JPEG magic
+    await expect(parseOfficeBuffer(random)).rejects.toThrow('missing ZIP signature')
+  })
+})
 
 describe('walkContentNodes', () => {
   it('yields all nodes including children', () => {

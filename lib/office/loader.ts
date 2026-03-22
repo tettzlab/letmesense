@@ -11,7 +11,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS } from '../common/timeouts.js'
 import { obs, SemanticAttributes } from '../observability/index.js'
 import { OfficeLoadError } from './errors.js'
 import { Metrics, Spans } from './signals.js'
-import type { OfficeFormat, OfficeInput } from './types.js'
+import { type OfficeFormat, type OfficeInput, ZIP_MAGIC } from './types.js'
 
 /** Supported file extensions mapped to formats */
 const EXTENSION_MAP: Record<string, OfficeFormat> = {
@@ -32,9 +32,6 @@ const MIME_MAP: Record<string, OfficeFormat> = {
   'application/vnd.oasis.opendocument.presentation': 'odp',
   'application/vnd.oasis.opendocument.spreadsheet': 'ods',
 }
-
-/** ZIP file magic bytes */
-const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04]
 
 /** Result of loading an Office document */
 export interface LoadResult {
