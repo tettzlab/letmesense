@@ -19,6 +19,7 @@ import { calculateEntryCost, createJournalEntry } from '../ai/journal.js'
 import { getProvider } from '../ai/provider.js'
 import { buildProviderOptions } from '../ai/providerOptions.js'
 import { resolveModel as resolveModelFull } from '../ai/resolve.js'
+import { addGuardrail, wrapUntrustedContent } from '../ai/sanitize.js'
 import type { JournalCallback } from '../ai/types.js'
 import { obs, SemanticAttributes } from '../observability/index.js'
 import type { ImageContext } from '../pipeline/types.js'
@@ -43,39 +44,31 @@ export const VISION_DEFAULT_PROMPT =
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Build the full vision prompt with optional context.
- * Includes previous page output (for continuity) and extracted text (for accuracy).
+ * Build the user-facing content for vision analysis.
+ *
+ * Document content is wrapped in randomized delimiters to mitigate
+ * prompt injection from malicious documents. Base instructions go
+ * in the system message (see analyzeImage/analyzeImageStreaming).
  */
-function buildVisionPromptWithContext(
-  basePrompt: string,
-  extractedText?: string,
-  previousPageOutput?: string,
-): string {
-  const parts: string[] = [basePrompt]
+function buildVisionUserContent(extractedText?: string, previousPageOutput?: string): string {
+  const parts: string[] = []
 
-  // Add previous page context for continuity
   if (previousPageOutput) {
-    parts.push(`
----
-
-**Previous page output (for continuity):**
-
-${previousPageOutput}
-
-Maintain continuity with the previous page. If content continues (lists, tables, sections, sentences), preserve that continuity in your formatting.`)
+    parts.push(
+      `Previous page output (for continuity):\n${wrapUntrustedContent(previousPageOutput, 'prev_page')}`,
+    )
+    parts.push(
+      'Maintain continuity with the previous page. If content continues (lists, tables, sections, sentences), preserve that continuity in your formatting.',
+    )
   }
 
-  // Add extracted text for accuracy
   if (extractedText) {
-    parts.push(`
----
-
-**Extracted text from document:**
-
-${extractedText}`)
+    parts.push(
+      `Extracted text from document:\n${wrapUntrustedContent(extractedText, 'extracted_text')}`,
+    )
   }
 
-  return parts.join('\n')
+  return parts.length > 0 ? parts.join('\n\n---\n\n') : 'Analyze this image.'
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -290,8 +283,11 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
       return { ok: false, error: 'Image data is required', code: 'INVALID_INPUT' }
     }
 
-    // Build the full prompt with context
-    const fullPrompt = buildVisionPromptWithContext(prompt, extractedText, previousPageOutput)
+    // Separate system prompt (instructions) from user content (document data)
+    const systemPrompt = addGuardrail(prompt)
+    const userContent = buildVisionUserContent(extractedText, previousPageOutput)
+    // For journaling, combine system + user content
+    const fullPrompt = `${systemPrompt}\n\n${userContent}`
 
     // Measure timing for journaling
     const startTime = performance.now()
@@ -307,11 +303,12 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
       const result = await Promise.race([
         generateText({
           model,
+          system: systemPrompt,
           messages: [
             {
               role: 'user',
               content: [
-                { type: 'text', text: fullPrompt },
+                { type: 'text', text: userContent },
                 { type: 'image', image: Buffer.from(imageData, 'base64') },
               ],
             },
@@ -450,8 +447,12 @@ export async function* analyzeImageStreaming(
     providerOptions,
   } = opts
 
-  // Build the full prompt with context
-  const fullPrompt = buildVisionPromptWithContext(prompt, extractedText, previousPageOutput)
+  // Separate system prompt (instructions) from user content (document data)
+  const systemPrompt = addGuardrail(prompt)
+  const userContent = buildVisionUserContent(extractedText, previousPageOutput)
+  // Journaling-only: flat concatenation for the journal `prompt` field.
+  // The actual API call uses separate system/user messages.
+  const fullPrompt = `${systemPrompt}\n\n${userContent}`
 
   // Measure timing for journaling
   const startTime = performance.now()
@@ -459,11 +460,12 @@ export async function* analyzeImageStreaming(
 
   const streamResult = streamText({
     model,
+    system: systemPrompt,
     messages: [
       {
         role: 'user',
         content: [
-          { type: 'text', text: fullPrompt },
+          { type: 'text', text: userContent },
           { type: 'image', image: Buffer.from(imageData, 'base64') },
         ],
       },

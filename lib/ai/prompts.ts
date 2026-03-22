@@ -86,6 +86,7 @@ export function substituteVariables(
   template: string,
   context: PageContext | Record<string, unknown>,
   customVariables?: Record<string, string>,
+  options?: { excludeKeys?: string[] },
 ): string {
   // Support both PageContext and generic record
   const ctx = context as PageContext
@@ -104,7 +105,9 @@ export function substituteVariables(
     ...customVariables,
   }
 
+  const excluded = new Set(options?.excludeKeys)
   return template.replace(/\{(\w+)\}/g, (match, key) => {
+    if (excluded.has(key)) return match
     const value = variables[key]
     return value !== undefined ? String(value) : match
   })

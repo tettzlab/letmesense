@@ -70,7 +70,7 @@ describe('vision', () => {
       }
     })
 
-    it('uses custom prompt when provided', async () => {
+    it('uses custom prompt as system message with guardrail', async () => {
       vi.mocked(generateText).mockResolvedValueOnce({
         text: 'Custom analysis result',
         finishReason: 'stop',
@@ -84,18 +84,15 @@ describe('vision', () => {
         prompt: 'Extract all text from this image',
       })
 
-      expect(generateText).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Extract all text from this image' },
-                { type: 'image', image: Buffer.from('base64data', 'base64') },
-              ],
-            },
-          ],
-        }),
+      const call = vi.mocked(generateText).mock.calls[0][0] as any
+      // Custom prompt goes to system role with guardrail appended
+      expect(call.system).toContain('Extract all text from this image')
+      expect(call.system).toContain('content safety rules (always apply')
+      // User message contains only image analysis request
+      expect(call.messages[0].content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'image', image: expect.any(Buffer) }),
+        ]),
       )
     })
 
@@ -268,18 +265,15 @@ describe('vision', () => {
         // just iterate
       }
 
-      expect(streamText).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: 'Custom prompt' },
-                { type: 'image', image: Buffer.from('base64data', 'base64') },
-              ],
-            },
-          ],
-        }),
+      const call = vi.mocked(streamText).mock.calls[0][0] as any
+      // Custom prompt goes to system role with guardrail
+      expect(call.system).toContain('Custom prompt')
+      expect(call.system).toContain('content safety rules (always apply')
+      // User message contains image
+      expect(call.messages[0].content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'image', image: expect.any(Buffer) }),
+        ]),
       )
     })
   })

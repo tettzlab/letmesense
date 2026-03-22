@@ -2,6 +2,8 @@
  * Prompt templates for map and reduce phases of condensation.
  */
 
+import { wrapUntrustedContent } from '../ai/sanitize.js'
+
 // ─────────────────────────────────────────────────────────────────────────────
 // System Prompts
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,12 +125,21 @@ export function substitutePromptVars(
 ): string {
   let result = template
   // Substitute non-text vars first, then text last
-  const { text, ...rest } = vars
+  const { text, headingContext, ...rest } = vars
   for (const [key, value] of Object.entries(rest)) {
     result = result.replaceAll(`{${key}}`, String(value))
   }
+  // Wrap heading context in delimiters (document-sourced, untrusted)
+  if (headingContext !== undefined) {
+    const ctx = String(headingContext)
+    result = result.replaceAll(
+      '{headingContext}',
+      ctx ? `${wrapUntrustedContent(ctx, 'heading')}\n\n` : '',
+    )
+  }
+  // Wrap text in delimiters (document content, untrusted)
   if (text !== undefined) {
-    result = result.replaceAll('{text}', String(text))
+    result = result.replaceAll('{text}', wrapUntrustedContent(String(text), 'document'))
   }
   return result
 }

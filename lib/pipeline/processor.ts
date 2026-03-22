@@ -492,7 +492,10 @@ export class PipelineProcessor {
             extractionConfidence,
             extractedText !== undefined,
           )
-          const unitPrompt = `${basePrompt}\n\nProcessing: ${unit.label}`
+          // Sanitize unit label (may contain attacker-controlled metadata
+          // like sheet names or HTML titles) before embedding in system prompt
+          const safeLabel = unit.label.replace(/[\n\r]/g, ' ').slice(0, 100)
+          const unitPrompt = `${basePrompt}\n\nProcessing: ${safeLabel}`
 
           // Stream LLM response (with extracted text and previous page context)
           let charCount = 0

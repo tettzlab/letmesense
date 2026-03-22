@@ -10,6 +10,7 @@ import { createModel } from '../ai/createModel.js'
 import { getProviderConfig, initModelRegistry, isRegistryConfigured } from '../ai/models.js'
 import { detectProvider } from '../ai/provider.js'
 import { type ResolvedModel, resolveModel } from '../ai/resolve.js'
+import { addGuardrail } from '../ai/sanitize.js'
 import { generateTextWithRetry, type StreamRetryOptions } from '../ai/stream.server.js'
 import { countTokensWithEncoding } from '../ai/tokenCounter.js'
 import { obs, SemanticAttributes } from '../observability/index.js'
@@ -560,7 +561,7 @@ async function callLlm(
     const result = await generateTextWithRetry(
       {
         model,
-        system: systemPrompt,
+        system: addGuardrail(systemPrompt),
         messages: [{ role: 'user', content: userPrompt }],
         maxOutputTokens: resolved.maxOutputTokens,
         abortSignal: signal,

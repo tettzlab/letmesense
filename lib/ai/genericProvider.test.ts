@@ -248,13 +248,42 @@ describe('createGenericProvider', () => {
       const result = await provider.format(request, createMockConfig())
 
       expect(result.content).toBe('Vision output')
-      // Verify generateText was called (messages contain image part)
+      // Verify generateText was called with system/user separation
       const call = vi.mocked(generateText).mock.calls[0][0] as any
+      expect(call.system).toBeDefined()
+      expect(call.system).toContain('content safety rules (always apply')
       expect(call.messages[0].content).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ type: 'image', image: expect.any(Buffer) }),
         ]),
       )
+    })
+  })
+
+  describe('prompt injection mitigation', () => {
+    it('separates system prompt from user content', async () => {
+      const adapter = createMockAdapter()
+
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'Output',
+        usage: { inputTokens: 10, outputTokens: 10 },
+      } as any)
+
+      const provider = createGenericProvider(adapter)
+      await provider.format(
+        { text: 'Test content', context: createMockContext() },
+        createMockConfig(),
+      )
+
+      const call = vi.mocked(generateText).mock.calls[0][0] as any
+      expect(call.system).toBeDefined()
+      expect(call.system).toContain('content safety rules (always apply')
+      // User message should contain wrapped document text
+      const userContent =
+        typeof call.messages[0].content === 'string'
+          ? call.messages[0].content
+          : call.messages[0].content[0].text
+      expect(userContent).toMatch(/<lms:document_text_[a-f0-9]{8}>/)
     })
   })
 

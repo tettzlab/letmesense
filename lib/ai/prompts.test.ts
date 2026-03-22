@@ -133,6 +133,31 @@ describe('substituteVariables', () => {
 
     expect(result).toBe('Text: ')
   })
+
+  it('excludes specified keys from substitution', () => {
+    const template = 'Content:\n{text}\nPage: {page}'
+    const context = createContext()
+
+    const result = substituteVariables(template, context, undefined, {
+      excludeKeys: ['text'],
+    })
+
+    expect(result).toContain('{text}')
+    expect(result).toContain('Page: 1')
+  })
+
+  it('excludes multiple keys', () => {
+    const template = '{text} on page {page} of {totalPages}'
+    const context = createContext({ page: 3, totalPages: 10 })
+
+    const result = substituteVariables(template, context, undefined, {
+      excludeKeys: ['text', 'page'],
+    })
+
+    expect(result).toContain('{text}')
+    expect(result).toContain('{page}')
+    expect(result).toContain('of 10')
+  })
 })
 
 describe('buildPrompt', () => {

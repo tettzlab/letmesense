@@ -9,9 +9,15 @@ import { generateText, streamText } from 'ai'
 import { obs, SemanticAttributes } from '../observability/index.js'
 import { ProviderUnavailableError, parseApiError } from './errors.js'
 import { getModelPricing, getProviderConfig, modelSupportsPdf } from './models.js'
-import { buildPrompt, DEFAULT_TEXT_PROMPT, DEFAULT_VISION_PROMPT } from './prompts.js'
+import {
+  CONTINUITY_PROMPT_PREFIX,
+  DEFAULT_TEXT_PROMPT,
+  DEFAULT_VISION_PROMPT,
+  substituteVariables,
+} from './prompts.js'
 import type { ProviderAdapter } from './providerAdapters.js'
 import { AbortRetryError, withRetry } from './retry.js'
+import { addGuardrail, wrapUntrustedContent } from './sanitize.js'
 import { Metrics } from './signals.js'
 import { calculateMaxOutputTokens } from './tokens.js'
 import type {
@@ -20,6 +26,7 @@ import type {
   LlmConfig,
   LlmProvider,
   ModelPricing,
+  PageContext,
 } from './types.js'
 
 /**
@@ -37,51 +44,82 @@ function calculateCost(
 }
 
 /**
- * Build messages for chat completion, using model capabilities
- * to determine whether to send PDF, image, or text-only.
+ * Build system prompt and user messages for chat completion.
+ *
+ * Separates base instructions (system role) from document content
+ * (user role) to mitigate prompt injection via malicious documents.
+ * Document text is wrapped in randomized delimiters.
  */
 function buildMessages(request: FormatRequest, model: string, vision: boolean) {
   const promptTemplate =
     request.promptTemplate ?? (vision ? DEFAULT_VISION_PROMPT : DEFAULT_TEXT_PROMPT)
 
-  const prompt = buildPrompt(promptTemplate, request.context ?? {}, {
-    includeContinuity: true,
-    customVariables: request.promptVariables,
+  // Build the system prompt: substitute all vars except {text},
+  // then strip the {text} placeholder (it goes in the user message)
+  const ctx = request.context ?? {}
+  const pageCtx = ctx as PageContext
+
+  let systemBase = promptTemplate
+  // Add continuity prefix for multi-page documents
+  if (pageCtx.page > 1 && pageCtx.previousTail) {
+    systemBase = CONTINUITY_PROMPT_PREFIX + systemBase
+  }
+
+  const systemWithVars = substituteVariables(systemBase, ctx, request.promptVariables, {
+    excludeKeys: ['text'],
   })
+  const system = addGuardrail(
+    systemWithVars
+      .replace(/\n*(?:Extracted )?[Tt]ext:\n*\{text\}\s*$/i, '')
+      .replaceAll('{text}', '')
+      .trim(),
+  )
+
+  // Build user content: wrap document text in randomized delimiters
+  const textContent = pageCtx.text ?? request.text ?? ''
+  const userText = textContent
+    ? wrapUntrustedContent(textContent, 'document_text')
+    : 'Format this document.'
 
   // PDF-direct mode (for providers/models that support it)
   if (vision && request.pdf && modelSupportsPdf(model)) {
-    return [
-      {
-        role: 'user' as const,
-        content: [
-          { type: 'text' as const, text: prompt },
-          {
-            type: 'file' as const,
-            data: request.pdf.toString('base64'),
-            mediaType: 'application/pdf' as const,
-          },
-        ],
-      },
-    ]
+    return {
+      system,
+      messages: [
+        {
+          role: 'user' as const,
+          content: [
+            { type: 'text' as const, text: userText },
+            {
+              type: 'file' as const,
+              data: request.pdf.toString('base64'),
+              mediaType: 'application/pdf' as const,
+            },
+          ],
+        },
+      ],
+    }
   }
 
   // Vision request with image
   if (vision && request.image) {
-    return [
-      {
-        role: 'user' as const,
-        content: [
-          { type: 'text' as const, text: prompt },
-          // Vercel AI SDK image part expects Buffer, not base64 string
-          { type: 'image' as const, image: Buffer.from(request.image, 'base64') },
-        ],
-      },
-    ]
+    return {
+      system,
+      messages: [
+        {
+          role: 'user' as const,
+          content: [
+            { type: 'text' as const, text: userText },
+            // Vercel AI SDK image part expects Buffer, not base64 string
+            { type: 'image' as const, image: Buffer.from(request.image, 'base64') },
+          ],
+        },
+      ],
+    }
   }
 
   // Text-only request
-  return [{ role: 'user' as const, content: prompt }]
+  return { system, messages: [{ role: 'user' as const, content: userText }] }
 }
 
 /**
@@ -143,13 +181,14 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           }
         }
 
-        const messages = buildMessages(request, model, vision)
+        const { system, messages } = buildMessages(request, model, vision)
         const maxOutputTokens = calculateMaxOutputTokens(request.text ?? '', model)
 
         const retryResult = await withRetry(
           async () =>
             generateText({
               model: adapter.createLanguageModel(config, model),
+              system,
               messages,
               maxOutputTokens,
               providerOptions: config.providerOptions,
@@ -286,7 +325,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           }
         }
 
-        const messages = buildMessages(request, model, vision)
+        const { system, messages } = buildMessages(request, model, vision)
         const maxOutputTokens = calculateMaxOutputTokens(request.text ?? '', model)
 
         // For streaming, retry only if no chunks have been emitted yet.
@@ -296,6 +335,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           async () => {
             const result = streamText({
               model: adapter.createLanguageModel(config, model),
+              system,
               messages,
               maxOutputTokens,
               providerOptions: config.providerOptions,
