@@ -4,6 +4,7 @@
 [![CodeQL](https://github.com/tettzlab/letmesense/actions/workflows/codeql.yml/badge.svg)](https://github.com/tettzlab/letmesense/actions/workflows/codeql.yml)
 [![Known Vulnerabilities](https://snyk.io/test/github/tettzlab/letmesense/badge.svg)](https://snyk.io/test/github/tettzlab/letmesense)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![OSS Licenses](https://img.shields.io/badge/deps-no_strong_copyleft-brightgreen)](#license)
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-brightgreen)](https://nodejs.org)
 
 Extract text from PDFs and Office documents with automatic OCR fallback and optional LLM enhancement.
@@ -379,5 +380,7 @@ Download `*.traineddata.gz` files to `tessdata/`.
 ## License
 
 Apache-2.0
+
+**Dependency licensing:** All runtime dependencies use permissive (MIT, Apache-2.0, ISC, BSD) or weak-copyleft (LGPL, MPL-2.0) licenses. There are **no strong copyleft (GPL, AGPL)** runtime dependencies — safe for proprietary and commercial use. Run `pnpm licenses list` to verify.
 
 **Note:** Spreadsheet fixture generation uses [ExcelJS](https://github.com/exceljs/exceljs) (MIT licensed).
