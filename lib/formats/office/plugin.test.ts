@@ -5,10 +5,10 @@ import { officePlugin } from './plugin.js'
 import type { OfficeLoadedDocument, OfficeUnit } from './types.js'
 
 // Test sample paths
-const SAMPLES_DIR = path.resolve(import.meta.dirname, '../../../samples')
-const SAMPLE_DOCX = path.join(SAMPLES_DIR, 'sample.docx')
-const SAMPLE_PPTX = path.join(SAMPLES_DIR, 'sample.pptx')
-const SAMPLE_XLSX = path.join(SAMPLES_DIR, 'sample.xlsx')
+const FIXTURES_DIR = path.resolve(import.meta.dirname, '../../office/fixtures')
+const SAMPLE_DOCX = path.join(FIXTURES_DIR, 'sample.docx')
+const SAMPLE_PPTX = path.join(FIXTURES_DIR, 'sample.pptx')
+const SAMPLE_XLSX = path.join(FIXTURES_DIR, 'sample.xlsx')
 
 async function fileExists(filePath: string): Promise<boolean> {
   return fs

@@ -5,10 +5,10 @@ import { imagePlugin } from './plugin.js'
 import type { ImageLoadedDocument, ImageUnit } from './types.js'
 
 // Test sample paths
-const SAMPLES_DIR = path.resolve(import.meta.dirname, '../../../samples')
-const SAMPLE_PNG = path.join(SAMPLES_DIR, 'sample.png')
-const SAMPLE_JPG = path.join(SAMPLES_DIR, 'sample.jpg')
-const SAMPLE_SVG = path.join(SAMPLES_DIR, 'sample.svg')
+const FIXTURES_DIR = path.resolve(import.meta.dirname, '../../../cli/fixtures')
+const SAMPLE_PNG = path.join(FIXTURES_DIR, 'solid-red.png')
+const SAMPLE_JPG = path.join(FIXTURES_DIR, 'solid-green.jpg')
+const SAMPLE_SVG = path.join(FIXTURES_DIR, 'test.svg')
 
 async function fileExists(filePath: string): Promise<boolean> {
   return fs
@@ -54,7 +54,7 @@ describe('imagePlugin', () => {
   describe('load', () => {
     it('loads PNG from file path', async () => {
       if (!(await fileExists(SAMPLE_PNG))) {
-        console.log('Skipping test: sample.png not found')
+        console.log('Skipping test: solid-red.png not found')
         return
       }
 
@@ -72,7 +72,7 @@ describe('imagePlugin', () => {
 
     it('loads JPG from file path', async () => {
       if (!(await fileExists(SAMPLE_JPG))) {
-        console.log('Skipping test: sample.jpg not found')
+        console.log('Skipping test: solid-green.jpg not found')
         return
       }
 
@@ -86,7 +86,7 @@ describe('imagePlugin', () => {
 
     it('loads SVG from file path', async () => {
       if (!(await fileExists(SAMPLE_SVG))) {
-        console.log('Skipping test: sample.svg not found')
+        console.log('Skipping test: test.svg not found')
         return
       }
 
@@ -186,7 +186,7 @@ describe('imagePlugin', () => {
   describe('parse', () => {
     it('parses image as single unit', async () => {
       if (!(await fileExists(SAMPLE_PNG))) {
-        console.log('Skipping test: sample.png not found')
+        console.log('Skipping test: solid-red.png not found')
         return
       }
 
@@ -250,7 +250,7 @@ describe('imagePlugin', () => {
 describe('imagePlugin integration', () => {
   it('full extraction pipeline for PNG', async () => {
     if (!(await fileExists(SAMPLE_PNG))) {
-      console.log('Skipping test: sample.png not found')
+      console.log('Skipping test: solid-red.png not found')
       return
     }
 
@@ -281,7 +281,7 @@ describe('imagePlugin integration', () => {
 
   it('full extraction pipeline for JPG', async () => {
     if (!(await fileExists(SAMPLE_JPG))) {
-      console.log('Skipping test: sample.jpg not found')
+      console.log('Skipping test: solid-green.jpg not found')
       return
     }
 
@@ -300,7 +300,7 @@ describe('imagePlugin integration', () => {
 
   it('renders image with base64 data', async () => {
     if (!(await fileExists(SAMPLE_PNG))) {
-      console.log('Skipping test: sample.png not found')
+      console.log('Skipping test: solid-red.png not found')
       return
     }
 
@@ -323,7 +323,7 @@ describe('imagePlugin integration', () => {
 
   it('renders with scale option', async () => {
     if (!(await fileExists(SAMPLE_PNG))) {
-      console.log('Skipping test: sample.png not found')
+      console.log('Skipping test: solid-red.png not found')
       return
     }
 
