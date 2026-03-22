@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/tettzlab/letmesense/actions/workflows/ci.yml/badge.svg)](https://github.com/tettzlab/letmesense/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/tettzlab/letmesense/actions/workflows/codeql.yml/badge.svg)](https://github.com/tettzlab/letmesense/actions/workflows/codeql.yml)
+[![Known Vulnerabilities](https://snyk.io/test/github/tettzlab/letmesense/badge.svg)](https://snyk.io/test/github/tettzlab/letmesense)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A524-brightgreen)](https://nodejs.org)
 
