@@ -19,7 +19,7 @@ import { calculateEntryCost, createJournalEntry } from '../ai/journal.js'
 import { getProvider } from '../ai/provider.js'
 import { buildProviderOptions } from '../ai/providerOptions.js'
 import { resolveModel as resolveModelFull } from '../ai/resolve.js'
-import { addGuardrail, wrapUntrustedContent } from '../ai/sanitize.js'
+import { addCanary, addGuardrail, validateOutput, wrapUntrustedContent } from '../ai/sanitize.js'
 import type { JournalCallback } from '../ai/types.js'
 import { obs, SemanticAttributes } from '../observability/index.js'
 import type { ImageContext } from '../pipeline/types.js'
@@ -43,32 +43,56 @@ export const VISION_DEFAULT_PROMPT =
 // Prompt Building
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** A single message in the vision conversation. */
+interface VisionMessage {
+  role: 'user'
+  content: string | Array<{ type: 'text'; text: string } | { type: 'image'; image: Buffer }>
+}
+
 /**
- * Build the user-facing content for vision analysis.
+ * Build separated user messages for vision analysis.
  *
- * Document content is wrapped in randomized delimiters to mitigate
- * prompt injection from malicious documents. Base instructions go
- * in the system message (see analyzeImage/analyzeImageStreaming).
+ * Uses multi-message structure (mitigation #4): the image + instruction
+ * go in one user message, while extracted text and previous page output
+ * each get their own isolated user messages with randomized delimiters.
+ * This gives the model provider an API-level boundary between the task
+ * and the untrusted document content.
  */
-function buildVisionUserContent(extractedText?: string, previousPageOutput?: string): string {
-  const parts: string[] = []
+function buildVisionMessages(
+  imageData: string,
+  extractedText?: string,
+  previousPageOutput?: string,
+): VisionMessage[] {
+  const messages: VisionMessage[] = []
 
+  // Message 1: instruction + image (trusted)
+  messages.push({
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Format the following document page as markdown.' },
+      { type: 'image', image: Buffer.from(imageData, 'base64') },
+    ],
+  })
+
+  // Message 2: previous page context (untrusted, isolated)
   if (previousPageOutput) {
-    parts.push(
-      `Previous page output (for continuity):\n${wrapUntrustedContent(previousPageOutput, 'prev_page')}`,
-    )
-    parts.push(
-      'Maintain continuity with the previous page. If content continues (lists, tables, sections, sentences), preserve that continuity in your formatting.',
-    )
+    messages.push({
+      role: 'user',
+      content:
+        `Previous page output (for continuity):\n${wrapUntrustedContent(previousPageOutput, 'prev_page')}` +
+        '\n\nMaintain continuity with the previous page. If content continues (lists, tables, sections, sentences), preserve that continuity in your formatting.',
+    })
   }
 
+  // Message 3: extracted text (untrusted, isolated)
   if (extractedText) {
-    parts.push(
-      `Extracted text from document:\n${wrapUntrustedContent(extractedText, 'extracted_text')}`,
-    )
+    messages.push({
+      role: 'user',
+      content: `Extracted text from document (use as reference for accuracy):\n${wrapUntrustedContent(extractedText, 'extracted_text')}`,
+    })
   }
 
-  return parts.length > 0 ? parts.join('\n\n---\n\n') : 'Analyze this image.'
+  return messages
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,7 +276,7 @@ function getModelPricing(modelId: string): { providerName: string; pricing: Mode
  * For use in agent tool where complete response is needed.
  */
 export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionResult> {
-  const { tracer, metrics } = obs('images')
+  const { tracer, metrics, logger } = obs('images')
 
   return tracer.startSpan(Spans.ANALYZE, async (span) => {
     const {
@@ -283,11 +307,14 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
       return { ok: false, error: 'Image data is required', code: 'INVALID_INPUT' }
     }
 
-    // Separate system prompt (instructions) from user content (document data)
-    const systemPrompt = addGuardrail(prompt)
-    const userContent = buildVisionUserContent(extractedText, previousPageOutput)
-    // For journaling, combine system + user content
-    const fullPrompt = `${systemPrompt}\n\n${userContent}`
+    // Separate system prompt (instructions) from user messages (document data)
+    const { prompt: systemPrompt, canary } = addCanary(addGuardrail(prompt))
+    const messages = buildVisionMessages(imageData, extractedText, previousPageOutput)
+    // For journaling, combine system + user content summaries
+    const messageSummaries = messages
+      .map((m) => (typeof m.content === 'string' ? m.content : '[image + instruction]'))
+      .join('\n---\n')
+    const fullPrompt = `${systemPrompt}\n\n${messageSummaries}`
 
     // Measure timing for journaling
     const startTime = performance.now()
@@ -304,15 +331,7 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
         generateText({
           model,
           system: systemPrompt,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                { type: 'text', text: userContent },
-                { type: 'image', image: Buffer.from(imageData, 'base64') },
-              ],
-            },
-          ],
+          messages,
           maxOutputTokens: 4096,
           providerOptions,
         }),
@@ -322,6 +341,16 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
 
       const durationMs = Math.round(performance.now() - startTime)
       const fullText = result.text ?? ''
+
+      // Post-filter: check for prompt injection signals
+      const validation = validateOutput(fullText, canary)
+      if (!validation.clean) {
+        logger.warn(
+          { flags: validation.flags },
+          'Prompt injection signals detected in vision output',
+        )
+        span.addEvent('injection_detected', { flags: validation.flags.join(',') })
+      }
       const description = fullText.slice(0, maxOutputChars)
       const truncated = fullText.length > maxOutputChars
 
@@ -430,7 +459,7 @@ export async function analyzeImage(opts: VisionAnalysisOptions): Promise<VisionR
 export async function* analyzeImageStreaming(
   opts: VisionAnalysisOptions,
 ): AsyncGenerator<string, void, unknown> {
-  const { metrics } = obs('images')
+  const { metrics, logger } = obs('images')
 
   const {
     imageData,
@@ -447,12 +476,15 @@ export async function* analyzeImageStreaming(
     providerOptions,
   } = opts
 
-  // Separate system prompt (instructions) from user content (document data)
-  const systemPrompt = addGuardrail(prompt)
-  const userContent = buildVisionUserContent(extractedText, previousPageOutput)
+  // Separate system prompt (instructions) from user messages (document data)
+  const { prompt: systemPrompt, canary } = addCanary(addGuardrail(prompt))
+  const messages = buildVisionMessages(imageData, extractedText, previousPageOutput)
   // Journaling-only: flat concatenation for the journal `prompt` field.
   // The actual API call uses separate system/user messages.
-  const fullPrompt = `${systemPrompt}\n\n${userContent}`
+  const messageSummaries = messages
+    .map((m) => (typeof m.content === 'string' ? m.content : '[image + instruction]'))
+    .join('\n---\n')
+  const fullPrompt = `${systemPrompt}\n\n${messageSummaries}`
 
   // Measure timing for journaling
   const startTime = performance.now()
@@ -461,15 +493,7 @@ export async function* analyzeImageStreaming(
   const streamResult = streamText({
     model,
     system: systemPrompt,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: userContent },
-          { type: 'image', image: Buffer.from(imageData, 'base64') },
-        ],
-      },
-    ],
+    messages,
     maxOutputTokens: 4096,
     providerOptions,
   })
@@ -491,9 +515,19 @@ export async function* analyzeImageStreaming(
   metrics.counter(Metrics.ANALYSIS_COUNT).add(1, { status: 'success', streaming: 'true' })
   metrics.histogram(Metrics.ANALYSIS_DURATION_MS).record(durationMs)
 
+  // Post-filter: check for prompt injection signals
+  const fullOutput = chunks.join('')
+  const validation = validateOutput(fullOutput, canary)
+  if (!validation.clean) {
+    logger.warn(
+      { flags: validation.flags, streaming: true },
+      'Prompt injection signals detected in vision output',
+    )
+  }
+
   // Journal after stream completes if experiment is enabled
   if (experiment && onJournal) {
-    const fullText = chunks.join('')
+    const fullText = fullOutput
     const modelId = getModelId(model)
     const { providerName, pricing } = getModelPricing(modelId)
 

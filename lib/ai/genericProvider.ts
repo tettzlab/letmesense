@@ -17,7 +17,7 @@ import {
 } from './prompts.js'
 import type { ProviderAdapter } from './providerAdapters.js'
 import { AbortRetryError, withRetry } from './retry.js'
-import { addGuardrail, wrapUntrustedContent } from './sanitize.js'
+import { addCanary, addGuardrail, validateOutput, wrapUntrustedContent } from './sanitize.js'
 import { Metrics } from './signals.js'
 import { calculateMaxOutputTokens } from './tokens.js'
 import type {
@@ -68,12 +68,13 @@ function buildMessages(request: FormatRequest, model: string, vision: boolean) {
   const systemWithVars = substituteVariables(systemBase, ctx, request.promptVariables, {
     excludeKeys: ['text'],
   })
-  const system = addGuardrail(
+  const guarded = addGuardrail(
     systemWithVars
       .replace(/\n*(?:Extracted )?[Tt]ext:\n*\{text\}\s*$/i, '')
       .replaceAll('{text}', '')
       .trim(),
   )
+  const { prompt: system, canary } = addCanary(guarded)
 
   // Build user content: wrap document text in randomized delimiters
   const textContent = pageCtx.text ?? request.text ?? ''
@@ -85,6 +86,7 @@ function buildMessages(request: FormatRequest, model: string, vision: boolean) {
   if (vision && request.pdf && modelSupportsPdf(model)) {
     return {
       system,
+      canary,
       messages: [
         {
           role: 'user' as const,
@@ -105,6 +107,7 @@ function buildMessages(request: FormatRequest, model: string, vision: boolean) {
   if (vision && request.image) {
     return {
       system,
+      canary,
       messages: [
         {
           role: 'user' as const,
@@ -119,7 +122,7 @@ function buildMessages(request: FormatRequest, model: string, vision: boolean) {
   }
 
   // Text-only request
-  return { system, messages: [{ role: 'user' as const, content: userText }] }
+  return { system, canary, messages: [{ role: 'user' as const, content: userText }] }
 }
 
 /**
@@ -181,7 +184,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           }
         }
 
-        const { system, messages } = buildMessages(request, model, vision)
+        const { system, canary, messages } = buildMessages(request, model, vision)
         const maxOutputTokens = calculateMaxOutputTokens(request.text ?? '', model)
 
         const retryResult = await withRetry(
@@ -207,6 +210,16 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
         }
 
         const result = retryResult.result
+
+        // Post-filter: check for prompt injection signals
+        const validation = validateOutput(result.text ?? '', canary)
+        if (!validation.clean) {
+          logger.warn(
+            { flags: validation.flags, model, provider: providerId },
+            'Prompt injection signals detected in LLM output',
+          )
+          span.addEvent('injection_detected', { flags: validation.flags.join(',') })
+        }
         const finishReason = result.finishReason ?? 'unknown'
 
         // Extract detailed token usage via adapter
@@ -325,7 +338,7 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
           }
         }
 
-        const { system, messages } = buildMessages(request, model, vision)
+        const { system, canary, messages } = buildMessages(request, model, vision)
         const maxOutputTokens = calculateMaxOutputTokens(request.text ?? '', model)
 
         // For streaming, retry only if no chunks have been emitted yet.
@@ -400,6 +413,16 @@ export function createGenericProvider(adapter: ProviderAdapter): LlmProvider {
         }
 
         const { inputTokens, outputTokens } = retryResult.result.usage
+
+        // Post-filter: check for prompt injection signals
+        const validation = validateOutput(retryResult.result.content ?? '', canary)
+        if (!validation.clean) {
+          logger.warn(
+            { flags: validation.flags, model, provider: providerId, streaming: true },
+            'Prompt injection signals detected in LLM output',
+          )
+          span.addEvent('injection_detected', { flags: validation.flags.join(',') })
+        }
 
         // Debug logging for empty output
         if (!retryResult.result.content || retryResult.result.content.length === 0) {
