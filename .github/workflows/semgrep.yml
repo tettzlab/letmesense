@@ -14,14 +14,16 @@ permissions:
 jobs:
   semgrep:
     runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Run Semgrep
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: >-
-            p/javascript
-            p/typescript
-            p/nodejs
-            p/security-audit
+        run: >-
+          semgrep scan
+          --error
+          --config p/javascript
+          --config p/typescript
+          --config p/nodejs
+          --config p/security-audit
