@@ -11,7 +11,10 @@ import {
 
 vi.mock('../observability/index.js', () => ({
   obs: () => ({
-    tracer: { startSpan: (_: string, fn: Function) => fn({ setAttribute: vi.fn() }) },
+    tracer: {
+      startSpan: (_: string, fn: (span: Record<string, unknown>) => unknown) =>
+        fn({ setAttribute: vi.fn() }),
+    },
     metrics: { counter: () => ({ add: vi.fn() }), histogram: () => ({ record: vi.fn() }) },
     logger: { debug: vi.fn(), warn: vi.fn() },
   }),
